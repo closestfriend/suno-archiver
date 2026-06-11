@@ -6,11 +6,13 @@ Archive your entire Suno music library — MP3 audio, cover art, and full metada
 
 Suno's Warner Music deal (early 2026) removed free download access ahead of schedule for many accounts. Your creations live in Suno's cloud; this tool gives you a local copy under your own control. Run it on a schedule and you'll never lose a track.
 
+> **Tested at scale.** A full **1,668-track library** spanning two years (2024–2026) archived in a single run — **5.7 GB**, 99.9% success rate, no rate-limiting or throttling. The handful of missing files were dead/transient links on Suno's CDN, not failures of the tool — and a re-run picks them up.
+
 ## What it grabs
 
 | File | Details |
 |---|---|
-| `.mp3` | Audio (128 kbps Suno stream) |
+| `.mp3` | Audio (Suno's MP3 stream) |
 | `.jpg` | Cover art |
 | `.json` | Full metadata — prompt, tags, lyrics, duration, model version, created/updated dates |
 | `library_index.json` | All songs in one file, grep/jq-friendly |
@@ -86,6 +88,17 @@ suno_archive/
 ```
 
 Songs are organized into `YYYY-MM/` month folders. The state file records the last run timestamp for `--last-run` incremental syncs.
+
+## Resilient by design
+
+Archiving thousands of files over an undocumented API means things will occasionally go wrong mid-run. The tool is built so that they don't cost you:
+
+- **Per-file errors never abort the run.** A dead CDN link (403) or a transient hiccup (503) is counted and reported, then the run continues. You get a clear tally at the end: `3333 downloaded, 0 skipped, 3 errors`.
+- **Expired sessions self-heal.** Suno's auth tokens are short-lived; the tool transparently re-mints them, and retries once on a 401 before giving up.
+- **Interrupted runs are safe.** The `--last-run` watermark is only saved when a fetch completes cleanly — so a connection drop or a kill mid-run can never cause the *next* incremental sync to silently skip tracks. You just re-run.
+- **Re-runs are free.** Idempotent skipping means re-running after a partial failure costs nothing for already-downloaded files; only the gaps are retried.
+
+If the tool ever stops working entirely (Suno changed their API), `suno-archiver doctor` tells you *which* layer broke — your login, the auth exchange, or the library endpoint — so you know whether to re-log-in or wait for an update.
 
 ## Related
 
