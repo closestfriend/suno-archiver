@@ -6,14 +6,13 @@ import click
 from dotenv import load_dotenv
 
 from . import __version__
-from .auth import AuthError, ClerkSession, get_client_cookie
+from .auth import AuthError, build_session, cookie_candidates
 from .core import SunoArchiver
 from .suno_api import SunoApi, SunoApiError
 
 
 def _build_archiver(**kwargs):
-    cookie = get_client_cookie()
-    api = SunoApi(ClerkSession(cookie))
+    api = SunoApi(build_session())
     return SunoArchiver(api, **kwargs)
 
 
@@ -48,18 +47,17 @@ def main(ctx, since, until, last_run, wav, archive_dir):
 def doctor():
     """Diagnose auth and API health step by step."""
     load_dotenv()
-    click.echo("1. Looking for Suno session cookie...")
+    click.echo("1. Looking for Suno session cookie(s)...")
     try:
-        cookie = get_client_cookie()
-        click.echo("   ok: cookie found")
+        candidates = cookie_candidates()
+        click.echo(f"   ok: {len(candidates)} candidate cookie(s) found")
     except AuthError as e:
         click.echo(f"   FAIL: {e}")
         sys.exit(1)
 
     click.echo("2. Exchanging cookie for a token (Clerk)...")
-    session = ClerkSession(cookie)
     try:
-        session.get_token()
+        session = build_session()
         click.echo("   ok: token minted")
     except AuthError as e:
         click.echo(f"   FAIL: {e}")
