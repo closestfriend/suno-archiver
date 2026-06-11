@@ -1,0 +1,11 @@
+.env
+.env.*
+.venv/
+__pycache__/
+*.py[cod]
+dist/
+build/
+*.egg-info/
+suno_archive*/
+.suno-archiver-state.json
+.DS_Store
