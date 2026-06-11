@@ -6,6 +6,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-suno_archive*/
+suno_archive/
+suno_archive_*/
 .suno-archiver-state.json
 .DS_Store
