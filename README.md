@@ -4,7 +4,15 @@ Archive your entire Suno music library — MP3 audio, cover art, and full metada
 
 ## Why
 
-Suno's Warner Music deal (early 2026) removed free download access ahead of schedule for many accounts. Your creations live in Suno's cloud; this tool gives you a local copy under your own control. Run it on a schedule and you'll never lose a track.
+Suno's web UI only lets you download tracks one at a time. If you've generated more than a handful, pulling them all by hand is tedious-to-impossible. This tool grabs your **entire** library in one command — audio, cover art, and full metadata as JSON — organized on your own disk.
+
+Useful if you:
+
+- have a large library (hundreds or thousands of generations) and want it all local — for a DAW, a dataset, offline access, or your own bookkeeping. A 1,600-track pull is one run, not 1,600 clicks.
+- want your data in a structured, scriptable form — every track's prompt, tags, model, and timestamps in JSON, plus a single `library_index.json` you can grep or query.
+- don't want to depend on the cloud staying put. Suno's Warner Music deal (early 2026) pulled free download access ahead of schedule; terms can change again. A local copy doesn't.
+
+Run it on a schedule with `--last-run` and the archive stays current automatically.
 
 > **Tested at scale.** A full **1,668-track library** spanning two years (2024–2026) archived in a single run — **5.7 GB**, 99.9% success rate, no rate-limiting or throttling. The handful of missing files were dead/transient links on Suno's CDN, not failures of the tool — and a re-run picks them up.
 
