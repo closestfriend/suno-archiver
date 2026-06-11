@@ -33,7 +33,9 @@ def get_client_cookie() -> str:
 
     for cookie in _browser_cookies():
         if cookie.get("name") == "__client":
-            return cookie.get("value", "")
+            value = cookie.get("value", "")
+            if value:
+                return value
 
     raise AuthError(
         "No Suno session found. Either log into suno.com in your browser, "
@@ -70,7 +72,13 @@ class ClerkSession:
         sessions = (resp.json().get("response") or {}).get("sessions") or []
         if not sessions:
             raise AuthError("No active Suno session for this cookie. Log into suno.com and re-run.")
-        self._session_id = sessions[0]["id"]
+        session_id = sessions[0].get("id")
+        if not session_id:
+            raise AuthError(
+                "Clerk returned a session with no ID; Suno may have changed auth. "
+                "Run `suno-archiver doctor`."
+            )
+        self._session_id = session_id
         return self._session_id
 
     def get_token(self) -> str:

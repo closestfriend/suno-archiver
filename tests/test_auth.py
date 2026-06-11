@@ -83,6 +83,33 @@ class TestClerkSession(unittest.TestCase):
         finally:
             server.close()
 
+    def test_session_without_id_raises_auth_error(self):
+        """Fix 1: Clerk session object missing 'id' must raise AuthError, not KeyError."""
+        def handler(method, path, headers, body):
+            if path.startswith("/v1/client?"):
+                return json_response(200, {"response": {"sessions": [{}]}})
+            return json_response(404, {"detail": "nope"})
+        server = LocalServer(handler)
+        try:
+            s = ClerkSession("my-client-cookie", base_url=server.url)
+            with self.assertRaises(AuthError) as ctx:
+                s.get_token()
+            self.assertIn("session", str(ctx.exception).lower())
+        finally:
+            server.close()
+
+
+class TestGetClientCookieEdgeCases(unittest.TestCase):
+    def test_empty_value_cookie_raises_auth_error(self):
+        """Fix 2: __client cookie with empty value must not be returned."""
+        fake_cookies = [{"name": "__client", "value": "", "domain": ".suno.com"}]
+        import os
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("SUNO_COOKIE", None)
+            with patch("suno_archiver.auth._browser_cookies", return_value=fake_cookies):
+                with self.assertRaises(AuthError):
+                    get_client_cookie()
+
 
 if __name__ == "__main__":
     unittest.main()
