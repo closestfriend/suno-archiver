@@ -25,16 +25,6 @@ class AuthError(Exception):
     """Authentication problem with a user-actionable message."""
 
 
-def _browser_cookies():
-    """Load suno.com cookies from installed browsers via rookiepy (legacy helper)."""
-    import rookiepy  # imported lazily: optional at runtime if SUNO_COOKIE is set
-
-    try:
-        return rookiepy.load(["suno.com"])
-    except Exception:
-        return []
-
-
 def _load_browser(name: str) -> list:
     """Load suno.com cookies from a single named browser via rookiepy.
 
