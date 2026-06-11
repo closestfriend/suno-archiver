@@ -150,10 +150,13 @@ class SunoArchiver:
         bucket = created.strftime("%Y-%m") if created else "unknown-date"
         return self.archive_dir / bucket
 
+    # Normalize common extension aliases so globs like *.jpg stay consistent.
+    _EXT_ALIASES = {".jpeg": ".jpg", ".jpe": ".jpg", ".tiff": ".tif"}
+
     def _extension_for(self, url, content_type):
         path_ext = Path(urlparse(url).path).suffix.lower()
         if path_ext and re.fullmatch(r"\.[a-z0-9]{1,5}", path_ext) and re.search(r"[a-z]", path_ext):
-            return path_ext
+            return self._EXT_ALIASES.get(path_ext, path_ext)
         if content_type:
             subtype = content_type.split(";")[0].strip().split("/")[-1].lower()
             special = {"mpeg": ".mp3", "jpeg": ".jpg", "plain": ".txt",
