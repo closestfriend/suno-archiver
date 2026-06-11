@@ -48,11 +48,12 @@ def doctor():
     """Diagnose auth and API health step by step."""
     load_dotenv()
     click.echo("1. Looking for Suno session cookie(s)...")
-    try:
-        candidates = cookie_candidates()
-        click.echo(f"   ok: {len(candidates)} candidate cookie(s) found")
-    except AuthError as e:
-        click.echo(f"   FAIL: {e}")
+    first = next(iter(cookie_candidates()), None)
+    if first is not None:
+        click.echo("   ok: session cookie found")
+    else:
+        from .auth import _AUTH_ERROR_MESSAGE
+        click.echo(f"   FAIL: {_AUTH_ERROR_MESSAGE}")
         sys.exit(1)
 
     click.echo("2. Exchanging cookie for a token (Clerk)...")

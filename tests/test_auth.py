@@ -16,14 +16,14 @@ class TestGetClientCookie(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=False):
             os.environ.pop("SUNO_COOKIE", None)
             with patch("suno_archiver.auth._browser_cookie_candidates",
-                       return_value=["cookie-from-browser"]):
+                       return_value=iter(["cookie-from-browser"])):
                 self.assertEqual(get_client_cookie(), "cookie-from-browser")
 
     def test_no_cookie_anywhere_raises_with_guidance(self):
         import os
         with patch.dict("os.environ", {}, clear=False):
             os.environ.pop("SUNO_COOKIE", None)
-            with patch("suno_archiver.auth._browser_cookie_candidates", return_value=[]):
+            with patch("suno_archiver.auth._browser_cookie_candidates", return_value=iter([])):
                 with self.assertRaises(AuthError) as ctx:
                     get_client_cookie()
         self.assertIn("SUNO_COOKIE", str(ctx.exception))
@@ -103,7 +103,7 @@ class TestGetClientCookieEdgeCases(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=False):
             os.environ.pop("SUNO_COOKIE", None)
             # _browser_cookie_candidates already filters empty values; simulate no valid ones
-            with patch("suno_archiver.auth._browser_cookie_candidates", return_value=[]):
+            with patch("suno_archiver.auth._browser_cookie_candidates", return_value=iter([])):
                 with self.assertRaises(AuthError):
                     get_client_cookie()
 
@@ -136,7 +136,7 @@ class TestBuildSessionTriesCandidatesInOrder(unittest.TestCase):
         handler = self._make_handler(stale, fresh, jwt, {fresh: "sess_fresh"})
         server = LocalServer(handler)
         try:
-            with patch("suno_archiver.auth.cookie_candidates", return_value=[stale, fresh]):
+            with patch("suno_archiver.auth.cookie_candidates", return_value=iter([stale, fresh])):
                 session = build_session(base_url=server.url)
                 self.assertEqual(session.get_token(), jwt)
         finally:
@@ -151,7 +151,7 @@ class TestBuildSessionAllFailRaisesAuthError(unittest.TestCase):
             return json_response(401, {"detail": "invalid"})
         server = LocalServer(handler)
         try:
-            with patch("suno_archiver.auth.cookie_candidates", return_value=["a", "b"]):
+            with patch("suno_archiver.auth.cookie_candidates", return_value=iter(["a", "b"])):
                 with self.assertRaises(AuthError) as ctx:
                     build_session(base_url=server.url)
             self.assertIn("2", str(ctx.exception))
@@ -179,7 +179,7 @@ class TestBrowserCookieCandidatesDedupes(unittest.TestCase):
             "firefox": [],
         }
         with patch("suno_archiver.auth._load_browser", side_effect=self._make_load_browser(browser_cookies)):
-            candidates = _browser_cookie_candidates()
+            candidates = list(_browser_cookie_candidates())
         self.assertEqual(candidates, ["cookie-A", "cookie-B"])
 
     def test_empty_value_skipped(self):
@@ -188,8 +188,85 @@ class TestBrowserCookieCandidatesDedupes(unittest.TestCase):
             "brave": [{"name": "__client", "value": "cookie-B", "domain": ".suno.com"}],
         }
         with patch("suno_archiver.auth._load_browser", side_effect=self._make_load_browser(browser_cookies)):
-            candidates = _browser_cookie_candidates()
+            candidates = list(_browser_cookie_candidates())
         self.assertEqual(candidates, ["cookie-B"])
+
+
+class TestCookieCandidatesIsLazy(unittest.TestCase):
+    """_browser_cookie_candidates is a generator — brave must not be called when chrome works."""
+
+    def test_brave_never_called_when_chrome_cookie_mints(self):
+        """Key laziness test: build_session stops at chrome; brave loader is never invoked."""
+        from tests.helpers import LocalServer, json_response
+        from suno_archiver.auth import _BROWSER_LOADER_NAMES
+
+        called_browsers = []
+
+        def fake_load_browser(name):
+            called_browsers.append(name)
+            if name == "chrome":
+                return [{"name": "__client", "value": "chrome-cookie", "domain": ".suno.com"}]
+            return []
+
+        def handler(method, path, headers, body):
+            if path.startswith("/v1/client?"):
+                return json_response(200, {
+                    "response": {"sessions": [{"id": "sess_chrome"}]}
+                })
+            if path.startswith("/v1/client/sessions/sess_chrome/tokens"):
+                return json_response(200, {"jwt": "jwt-chrome"})
+            return json_response(404, {"detail": "nope"})
+
+        server = LocalServer(handler)
+        try:
+            with patch("suno_archiver.auth._load_browser", side_effect=fake_load_browser):
+                import os
+                os.environ.pop("SUNO_COOKIE", None)
+                with patch.dict("os.environ", {}, clear=False):
+                    os.environ.pop("SUNO_COOKIE", None)
+                    session = build_session(base_url=server.url)
+                    self.assertEqual(session.get_token(), "jwt-chrome")
+            # Only chrome should have been loaded; brave and later browsers must be unvisited
+            self.assertEqual(called_browsers, ["chrome"],
+                             f"Expected only ['chrome'] but got {called_browsers}")
+        finally:
+            server.close()
+
+    def test_browser_cookie_candidates_is_a_generator(self):
+        """_browser_cookie_candidates() must return a generator, not a list."""
+        import types
+        with patch("suno_archiver.auth._load_browser", return_value=[]):
+            result = _browser_cookie_candidates()
+        self.assertIsInstance(result, types.GeneratorType)
+
+    def test_cookie_candidates_is_a_generator_without_env(self):
+        """cookie_candidates() without SUNO_COOKIE must return a generator."""
+        import os
+        import types
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("SUNO_COOKIE", None)
+            with patch("suno_archiver.auth._load_browser", return_value=[]):
+                result = cookie_candidates()
+        self.assertIsInstance(result, types.GeneratorType)
+
+    def test_cookie_candidates_with_env_is_iterable_yielding_env_value(self):
+        """cookie_candidates() with SUNO_COOKIE set must yield only that value."""
+        with patch.dict("os.environ", {"SUNO_COOKIE": "env-val"}):
+            result = list(cookie_candidates())
+        self.assertEqual(result, ["env-val"])
+
+
+class TestBuildSessionNoCandidatesRaises(unittest.TestCase):
+    """build_session raises AuthError mentioning SUNO_COOKIE when there are no candidates at all."""
+
+    def test_no_candidates_raises_auth_error_mentioning_suno_cookie(self):
+        import os
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("SUNO_COOKIE", None)
+            with patch("suno_archiver.auth._load_browser", return_value=[]):
+                with self.assertRaises(AuthError) as ctx:
+                    build_session()
+        self.assertIn("SUNO_COOKIE", str(ctx.exception))
 
 
 if __name__ == "__main__":

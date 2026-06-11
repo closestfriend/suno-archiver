@@ -55,58 +55,61 @@ def _load_browser(name: str) -> list:
         return []
 
 
-def _browser_cookie_candidates() -> list[str]:
-    """Collect __client cookie VALUES from every readable browser.
+def _browser_cookie_candidates():
+    """Yield __client cookie VALUES lazily from browsers, one browser at a time.
 
-    Iterates explicit per-browser loaders, collects non-empty __client values
-    preserving browser order, and dedupes while preserving order.
-    Returns [] if rookiepy is not installed or no cookies are found.
+    Iterates explicit per-browser loaders in order; yields each non-empty,
+    deduplicated __client value as soon as it is found — so callers that stop
+    early (e.g. after the first working cookie) never trigger Keychain prompts
+    for browsers that were never needed.
     """
     seen: set[str] = set()
-    result: list[str] = []
     for name in _BROWSER_LOADER_NAMES:
         for cookie in _load_browser(name):
             if cookie.get("name") == "__client":
                 value = cookie.get("value", "")
                 if value and value not in seen:
                     seen.add(value)
-                    result.append(value)
-    return result
+                    yield value
 
 
-def cookie_candidates() -> list[str]:
-    """Return ordered list of __client cookie candidates to try.
+def cookie_candidates():
+    """Yield __client cookie candidates lazily.
 
-    If SUNO_COOKIE env var is set, returns [that value].
-    Otherwise, collects from all readable browsers via _browser_cookie_candidates().
-    Raises AuthError if no candidates are found.
+    If SUNO_COOKIE env var is set, yields only that value (and returns).
+    Otherwise, delegates to _browser_cookie_candidates() which loads browsers
+    one at a time — stopping early avoids unnecessary Keychain prompts on macOS.
+
+    No longer raises on empty; consumers (build_session, get_client_cookie) are
+    responsible for raising AuthError when the generator is exhausted with no hits.
     """
     env_cookie = os.getenv("SUNO_COOKIE")
     if env_cookie:
-        return [env_cookie]
-    candidates = _browser_cookie_candidates()
-    if not candidates:
-        raise AuthError(_AUTH_ERROR_MESSAGE)
-    return candidates
+        yield env_cookie
+        return
+    yield from _browser_cookie_candidates()
 
 
 def build_session(base_url: str = CLERK_BASE) -> "ClerkSession":
     """Try each cookie candidate until one successfully mints a Clerk JWT.
 
+    Iterates cookie_candidates() lazily so only the browsers needed are read.
     Returns the first ClerkSession whose .get_token() succeeds.
-    Raises AuthError if all candidates fail.
+    Raises AuthError if the generator is empty (no candidates) or all fail.
     """
-    candidates = cookie_candidates()
-    for candidate in candidates:
+    count = 0
+    for candidate in cookie_candidates():
+        count += 1
         session = ClerkSession(candidate, base_url=base_url)
         try:
             session.get_token()
             return session
         except AuthError:
             continue
-    n = len(candidates)
+    if count == 0:
+        raise AuthError(_AUTH_ERROR_MESSAGE)
     raise AuthError(
-        f"Found {n} Suno session cookie(s) but none could start a session. "
+        f"Found {count} Suno session cookie(s) but none could start a session. "
         "Log into suno.com in your browser and re-run."
     )
 
@@ -114,9 +117,12 @@ def build_session(base_url: str = CLERK_BASE) -> "ClerkSession":
 def get_client_cookie() -> str:
     """Find the Suno Clerk __client cookie: SUNO_COOKIE env var, then browsers.
 
-    Backward-compatible: returns cookie_candidates()[0].
+    Returns the first available candidate.  Raises AuthError if none found.
     """
-    return cookie_candidates()[0]
+    value = next(iter(cookie_candidates()), None)
+    if value is None:
+        raise AuthError(_AUTH_ERROR_MESSAGE)
+    return value
 
 
 class ClerkSession:
