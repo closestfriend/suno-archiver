@@ -14,8 +14,10 @@ from suno_archiver.core import SunoArchiver
 class FakeApi:
     """Pages of clips; raises queued exceptions."""
 
-    def __init__(self, pages):
+    def __init__(self, pages, wav_url=None):
         self.pages = pages  # list of (list-of-clips | Exception); index = page number
+        self.wav_url = wav_url
+        self.wav_requests = []
 
     def list_library(self, page):
         if page >= len(self.pages):
@@ -24,6 +26,12 @@ class FakeApi:
         if isinstance(item, Exception):
             raise item
         return item
+
+    def request_wav(self, clip_id):
+        self.wav_requests.append(clip_id)
+
+    def get_wav_url(self, clip_id, interval=2.0, timeout=120.0):
+        return self.wav_url
 
 
 def clip(i, created_at="2026-06-01T00:00:00.000Z", **over):
@@ -104,6 +112,14 @@ class TestFetch(InTempDir):
         a.fetch_all_clips()  # must not raise
         self.assertEqual(len(a.clips), 1)
         self.assertFalse(a.fetch_complete)
+
+    def test_fetch_all_clips_resets_clips_on_second_call(self):
+        """Calling fetch_all_clips twice must not double the clip list."""
+        api = FakeApi([[clip(i) for i in range(3)]])
+        a = SunoArchiver(api)
+        a.fetch_all_clips()
+        a.fetch_all_clips()
+        self.assertEqual(len(a.clips), 3)
 
 
 class TestNaming(InTempDir):
@@ -203,6 +219,71 @@ class TestRun(InTempDir):
             a = SunoArchiver(api)
             a.run()
             self.assertFalse(Path("suno_archive/.suno-archiver-state.json").exists())
+        finally:
+            server.close()
+
+
+class TestWavPath(InTempDir):
+    def _server(self):
+        def handler(method, path, headers, body):
+            if path.endswith(".mp3"):
+                return (200, {"Content-Type": "audio/mpeg"}, b"mp3bytes")
+            if path.endswith(".jpeg"):
+                return (200, {"Content-Type": "image/jpeg"}, b"jpgbytes")
+            if path.endswith(".wav") or "wav" in path:
+                return (200, {"Content-Type": "audio/wav"}, b"wavbytes")
+            return (404, {"Content-Type": "text/plain"}, b"nope")
+        return LocalServer(handler)
+
+    def test_clip_with_embedded_wav_url_downloads_without_request_wav(self):
+        """Clip with audio_url_wav already set: run(want_wav=True) downloads the
+        wav directly; api.request_wav must NOT be called."""
+        server = self._server()
+        try:
+            c = clip(1, created_at="2026-06-10T00:00:00.000Z",
+                     audio_url=f"{server.url}/1.mp3",
+                     image_url=f"{server.url}/1.jpeg",
+                     audio_url_wav=f"{server.url}/1.wav")
+            api = FakeApi([[c]])
+            a = SunoArchiver(api, want_wav=True)
+            a.run()
+            month = Path("suno_archive/2026-06")
+            self.assertEqual(len(list(month.glob("*.wav"))), 1)
+            self.assertEqual(api.wav_requests, [])
+        finally:
+            server.close()
+
+    def test_clip_without_wav_key_calls_request_wav_then_downloads(self):
+        """Clip with no wav key: run(want_wav=True) must call request_wav with
+        the clip id, then download from the url returned by get_wav_url."""
+        server = self._server()
+        try:
+            c = clip(1, created_at="2026-06-10T00:00:00.000Z",
+                     audio_url=f"{server.url}/1.mp3",
+                     image_url=f"{server.url}/1.jpeg")
+            wav_url = f"{server.url}/converted.wav"
+            api = FakeApi([[c]], wav_url=wav_url)
+            a = SunoArchiver(api, want_wav=True)
+            a.run()
+            month = Path("suno_archive/2026-06")
+            self.assertEqual(len(list(month.glob("*.wav"))), 1)
+            self.assertEqual(api.wav_requests, ["clip-0001-aaaa-bbbb"])
+        finally:
+            server.close()
+
+    def test_clip_without_id_skips_wav_silently(self):
+        """Clip with id removed and no wav keys: run(want_wav=True) must complete
+        without crashing; api.wav_requests stays empty."""
+        server = self._server()
+        try:
+            c = clip(1, created_at="2026-06-10T00:00:00.000Z",
+                     audio_url=f"{server.url}/1.mp3",
+                     image_url=f"{server.url}/1.jpeg")
+            del c["id"]
+            api = FakeApi([[c]])
+            a = SunoArchiver(api, want_wav=True)
+            a.run()  # must not raise
+            self.assertEqual(api.wav_requests, [])
         finally:
             server.close()
 

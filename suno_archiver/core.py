@@ -88,6 +88,7 @@ class SunoArchiver:
         return since
 
     def fetch_all_clips(self):
+        self.clips = []
         since = self._resolve_since()
         # Watermark = fetch start: anything created later is the next run's job.
         self.fetch_start_time = datetime.now(timezone.utc).isoformat()
@@ -221,8 +222,10 @@ class SunoArchiver:
                     wav = self._wav_url_in_clip(c)
                     if wav:
                         jobs.append((wav, month, base))
+                    elif c.get("id"):
+                        jobs.append(("__convert__:" + c["id"], month, base))
                     else:
-                        jobs.append(("__convert__:" + str(c.get("id")), month, base))
+                        print("  WARNING: clip without id, skipping WAV conversion")
         return jobs, skipped
 
     def _run_job(self, job):
