@@ -67,6 +67,20 @@ class TestRequestCore(unittest.TestCase):
         finally:
             server.close()
 
+    def test_non_json_2xx_raises_status_minus_one(self):
+        """Non-JSON 2xx must raise SunoApiError with status==-1 and 'non-JSON' in message."""
+        def handler(method, path, headers, body):
+            return (200, {"Content-Type": "text/html"}, b"<html>login</html>")
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            with self.assertRaises(SunoApiError) as ctx:
+                api.list_library(page=0)
+            self.assertEqual(ctx.exception.status, -1)
+            self.assertIn("non-JSON", str(ctx.exception))
+        finally:
+            server.close()
+
 
 class TestWav(unittest.TestCase):
     def test_wav_poll_resolves_when_ready(self):
@@ -99,6 +113,18 @@ class TestWav(unittest.TestCase):
             with self.assertRaises(SunoApiError) as ctx:
                 api.get_wav_url("clip123", interval=0.01, timeout=0.05)
             self.assertIn("WAV", str(ctx.exception))
+        finally:
+            server.close()
+
+    def test_wav_poll_at_least_once_with_timeout_zero(self):
+        """get_wav_url(timeout=0) must poll once and return URL if immediately available."""
+        def handler(method, path, headers, body):
+            return json_response(200, {"wav_file_url": "https://cdn.example/x.wav"})
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            url = api.get_wav_url("clip123", interval=0.01, timeout=0)
+            self.assertEqual(url, "https://cdn.example/x.wav")
         finally:
             server.close()
 

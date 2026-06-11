@@ -40,7 +40,7 @@ class SunoApi:
         try:
             return resp.json()
         except ValueError:
-            raise SunoApiError(resp.status_code, "response was not JSON")
+            raise SunoApiError(-1, f"non-JSON response from Suno (HTTP {resp.status_code})")
 
     def list_library(self, page: int) -> list:
         """One page of the user's library, newest first. Empty list = past the end."""
@@ -54,11 +54,12 @@ class SunoApi:
 
     def get_wav_url(self, clip_id: str, interval: float = 2.0, timeout: float = 120.0) -> str:
         deadline = time.time() + timeout
-        while time.time() < deadline:
+        while True:
             data = self._request("GET", f"/api/gen/{clip_id}/wav_file/")
             if isinstance(data, dict):
                 for key in ("wav_file_url", "audio_url_wav", "wav_url", "audio_url"):
                     if data.get(key):
                         return data[key]
+            if time.time() >= deadline:
+                raise SunoApiError(408, f"WAV conversion for {clip_id} not ready after {timeout:.0f}s")
             time.sleep(interval)
-        raise SunoApiError(408, f"WAV conversion for {clip_id} not ready after {timeout:.0f}s")
