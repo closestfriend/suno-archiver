@@ -37,7 +37,7 @@ class TestClerkSession(unittest.TestCase):
     def _fake_clerk(self, mint_counter):
         def handler(method, path, headers, body):
             if path.startswith("/v1/client?"):
-                assert headers.get("Authorization") == "my-client-cookie"
+                assert headers.get("Cookie") == "__client=my-client-cookie", headers.get("Cookie")
                 return json_response(200, {
                     "response": {"sessions": [{"id": "sess_123"}]}
                 })
@@ -114,9 +114,9 @@ class TestBuildSessionTriesCandidatesInOrder(unittest.TestCase):
     def _make_handler(self, stale_cookie, fresh_cookie, fresh_jwt, sessions_by_cookie):
         """Fake Clerk: stale → 401 on /v1/client; fresh → normal sid+jwt flow."""
         def handler(method, path, headers, body):
-            auth = headers.get("Authorization", "")
+            cookie = headers.get("Cookie", "")
             if path.startswith("/v1/client?"):
-                if auth == fresh_cookie:
+                if cookie == f"__client={fresh_cookie}":
                     sid = sessions_by_cookie[fresh_cookie]
                     return json_response(200, {
                         "response": {"sessions": [{"id": sid}]}
@@ -124,7 +124,7 @@ class TestBuildSessionTriesCandidatesInOrder(unittest.TestCase):
                 # stale or unknown → 401
                 return json_response(401, {"detail": "invalid"})
             for cookie_val, sid in sessions_by_cookie.items():
-                if path.startswith(f"/v1/client/sessions/{sid}/tokens") and auth == cookie_val:
+                if path.startswith(f"/v1/client/sessions/{sid}/tokens") and cookie == f"__client={cookie_val}":
                     return json_response(200, {"jwt": fresh_jwt})
             return json_response(404, {"detail": "nope"})
         return handler

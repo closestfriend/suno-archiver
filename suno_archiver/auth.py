@@ -143,7 +143,7 @@ class ClerkSession:
             return self._session_id
         resp = requests.get(
             f"{self.base_url}/v1/client?{self._clerk_params()}",
-            headers={"Authorization": self.client_cookie},
+            headers={"Cookie": f"__client={self.client_cookie}"},
             timeout=30,
         )
         if not resp.ok:
@@ -170,7 +170,7 @@ class ClerkSession:
         sid = self._get_session_id()
         resp = requests.post(
             f"{self.base_url}/v1/client/sessions/{sid}/tokens?{self._clerk_params()}",
-            headers={"Authorization": self.client_cookie},
+            headers={"Cookie": f"__client={self.client_cookie}"},
             timeout=30,
         )
         if not resp.ok:
