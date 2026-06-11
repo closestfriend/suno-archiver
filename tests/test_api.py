@@ -1,5 +1,6 @@
 """Tests for suno_archiver.suno_api."""
 
+import json
 import unittest
 
 from tests.helpers import LocalServer, json_response
@@ -125,6 +126,38 @@ class TestWav(unittest.TestCase):
             api = SunoApi(FakeSession(), base_url=server.url)
             url = api.get_wav_url("clip123", interval=0.01, timeout=0)
             self.assertEqual(url, "https://cdn.example/x.wav")
+        finally:
+            server.close()
+
+
+class TestLibraryEndpoint(unittest.TestCase):
+    def test_uses_project_default_with_1indexed_pages_and_unwraps_project_clips(self):
+        seen_paths = []
+        def handler(method, path, headers, body):
+            seen_paths.append(path)
+            return json_response(200, {
+                "project_clips": [
+                    {"clip": {"id": "a", "title": "One"}, "pinned": False, "relative_index": 0.0},
+                    {"clip": {"id": "b", "title": "Two"}, "pinned": False, "relative_index": 1.0},
+                ],
+                "clip_count": 1668,
+            })
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            clips = api.list_library(page=0)   # core's 0-indexed page 0
+            self.assertEqual([c["id"] for c in clips], ["a", "b"])  # unwrapped
+            self.assertEqual(seen_paths[0], "/api/project/default?page=1")  # 1-indexed
+        finally:
+            server.close()
+
+    def test_empty_project_clips_means_end(self):
+        def handler(method, path, headers, body):
+            return json_response(200, {"project_clips": [], "clip_count": 1668})
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            self.assertEqual(api.list_library(page=99), [])
         finally:
             server.close()
 

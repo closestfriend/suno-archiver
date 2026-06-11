@@ -56,12 +56,14 @@ Clerk JWT lifecycle (mechanics confirmed from gcui-art/suno-api, June 2026):
 Owns base URL `https://studio-api.prod.suno.com`, all paths, headers, and the
 pinned Clerk version params. Nothing outside this module knows a Suno URL.
 
-- `list_library(page)` → `GET /api/feed/v2?page=N&hide_disliked=true&hide_gen_stems=true&hide_studio_clips=true`
-  (returns list of clip dicts; newest-first; empty list = end of pagination)
-  - **Open question to resolve in implementation, first task:** recon found two
-    candidates — `/api/feed/v2` (Suno_DownloadEverything, private library) and
-    `/api/feed/` (SunoSync's "My Library"). Verify against Hunter's real
-    account on day one; the adapter makes switching a one-line change.
+- `list_library(page)` → `GET /api/project/default?page=N` (1-indexed)
+  (returns list of clip dicts unwrapped from `project_clips[].clip`; newest-first; empty list = end of pagination)
+  - **Resolved (verified live against 1668-clip account):** the real user-library
+    endpoint is `/api/project/default` on studio-api.prod.suno.com. Pages are
+    1-indexed (page=1 is the first page); response is a dict with
+    `project_clips: [{clip, pinned, relative_index}, …]`; clips live at
+    `item["clip"]`. Both `/api/feed/v2` and `/api/feed/` are public social
+    feeds, not the user's own library — they are not used.
 - `request_wav(clip_id)` → `POST /api/gen/{clip_id}/convert_wav/`
 - `get_wav_url(clip_id)` → poll `GET /api/gen/{clip_id}/wav_file/` every 2s,
   timeout 120s, return URL or raise

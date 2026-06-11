@@ -5,8 +5,7 @@ import time
 import requests
 
 STUDIO_BASE = "https://studio-api.prod.suno.com"
-FEED_PATH = "/api/feed/v2"  # verified against real account in live-verification task; /api/feed/ is the fallback
-FEED_FILTERS = "hide_disliked=true&hide_gen_stems=true&hide_studio_clips=true"
+LIBRARY_PATH = "/api/project/default"  # the owned "My Workspace" default project (1-indexed pages)
 
 
 class SunoApiError(Exception):
@@ -43,9 +42,16 @@ class SunoApi:
             raise SunoApiError(-1, f"non-JSON response from Suno (HTTP {resp.status_code})")
 
     def list_library(self, page: int) -> list:
-        """One page of the user's library, newest first. Empty list = past the end."""
-        data = self._request("GET", f"{FEED_PATH}?page={page}&{FEED_FILTERS}")
-        if isinstance(data, dict):  # some deployments wrap: {"clips": [...]}
+        """One page (~20 clips) of the user's library, newest first.
+
+        `page` is 0-indexed per this method's contract; an empty list means
+        past the end. The Suno endpoint is 1-indexed and nests each clip under
+        project_clips[].clip, so we translate here.
+        """
+        data = self._request("GET", f"{LIBRARY_PATH}?page={page + 1}")
+        if isinstance(data, dict) and "project_clips" in data:
+            return [item["clip"] for item in data["project_clips"] if item.get("clip")]
+        if isinstance(data, dict):
             return data.get("clips") or data.get("results") or []
         return data or []
 
