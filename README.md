@@ -29,7 +29,7 @@ Run it on a schedule with `--last-run` and the archive stays current automatical
 ## Important
 
 - **Personal backup of your own creations only.** Do not scrape other users' libraries.
-- **Audio downloads require a paid Suno plan** (Pro or Premier). Metadata-only runs work on free plans.
+- **Plan requirements (partly unverified):** confirmed working end-to-end on a **Pro** plan. Metadata and cover art don't depend on your plan. Free-tier **audio** is untested — Suno removed the web-UI *download button* for free accounts after the 2026 Warner deal, but this tool pulls audio straight from the library API's CDN URLs rather than using that button, so it may still work on free. If you try it on a free plan, a report (issue/PR) is welcome.
 - **Undocumented API** — Suno can change or break this at any time. Run `suno-archiver doctor` if something stops working, and check for updates with `pip install -U suno-archiver`.
 
 ## Install
