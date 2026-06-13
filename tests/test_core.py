@@ -128,7 +128,10 @@ class TestNaming(InTempDir):
         c = clip(7, created_at="2026-06-10T05:00:00.000Z",
                  title="Skull UwU!! (on a black flag)")
         base = a.filename_base(c)
-        self.assertEqual(base, "2026-06-10_skull-uwu-on-a-black-flag_clip-000")
+        # id is sanitized (non-alphanumerics stripped) then truncated to 8 chars:
+        # "clip-0007-aaaa-bbbb" -> "clip0007". Real Suno UUIDs are unaffected
+        # (their first 8 chars are hex with no separator).
+        self.assertEqual(base, "2026-06-10_skull-uwu-on-a-black-flag_clip0007")
 
     def test_untitled_fallback(self):
         a = SunoArchiver(FakeApi([]))
@@ -137,6 +140,25 @@ class TestNaming(InTempDir):
 
 
 from tests.helpers import LocalServer
+
+
+class TestFilenameBaseSecurity(InTempDir):
+    def test_traversal_id_is_sanitized(self):
+        """Fix C: id containing path separators must produce a safe base."""
+        a = SunoArchiver(FakeApi([]))
+        c = clip(1, created_at="2026-06-01T00:00:00.000Z")
+        c["id"] = "../../../etc/passwd"
+        base = a.filename_base(c)
+        self.assertNotIn("/", base, "slash must not appear in filename_base")
+        self.assertNotIn("..", base, "dotdot must not appear in filename_base")
+
+    def test_traversal_id_noid_fallback(self):
+        """Fix C: id that reduces to empty after sanitization falls back to 'noid'."""
+        a = SunoArchiver(FakeApi([]))
+        c = clip(1, created_at="2026-06-01T00:00:00.000Z")
+        c["id"] = "../../../../"
+        base = a.filename_base(c)
+        self.assertIn("noid", base)
 
 
 class TestDownloadFile(InTempDir):

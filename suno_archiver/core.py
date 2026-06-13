@@ -147,7 +147,8 @@ class SunoArchiver:
     def filename_base(self, c):
         created = self._clip_created_at(c)
         date_str = created.strftime("%Y-%m-%d") if created else "unknown-date"
-        return f"{date_str}_{self._sanitize(c.get('title'))}_{str(c.get('id'))[:8]}"
+        clip_id = re.sub(r"[^a-zA-Z0-9]", "", str(c.get("id") or ""))[:8] or "noid"
+        return f"{date_str}_{self._sanitize(c.get('title'))}_{clip_id}"
 
     def _has_file(self, month, base, exts):
         return any((month / f"{base}.{ext}").exists() for ext in exts)
@@ -181,6 +182,8 @@ class SunoArchiver:
         ext = self._extension_for(url, resp.headers.get("Content-Type"))
         directory.mkdir(parents=True, exist_ok=True)
         filepath = directory / f"{base_name}{ext}"
+        if not filepath.resolve().is_relative_to(directory.resolve()):
+            raise ValueError(f"refusing to write outside archive dir: {filepath}")
         size = 0
         try:
             with open(filepath, "wb") as f:
