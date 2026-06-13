@@ -15,6 +15,9 @@ from .suno_api import SunoApiError
 STATE_FILENAME = ".suno-archiver-state.json"
 DOWNLOAD_CONCURRENCY = 4
 
+AUDIO_EXTS = ("mp3", "m4a", "ogg", "opus", "flac", "aac", "wav")
+IMAGE_EXTS = ("jpg", "jpeg", "png", "webp", "gif")
+
 
 class SunoArchiver:
     def __init__(self, api, archive_dir="suno_archive", since=None, until=None,
@@ -146,6 +149,9 @@ class SunoArchiver:
         date_str = created.strftime("%Y-%m-%d") if created else "unknown-date"
         return f"{date_str}_{self._sanitize(c.get('title'))}_{str(c.get('id'))[:8]}"
 
+    def _has_file(self, month, base, exts):
+        return any((month / f"{base}.{ext}").exists() for ext in exts)
+
     def _month_dir(self, c):
         created = self._clip_created_at(c)
         bucket = created.strftime("%Y-%m") if created else "unknown-date"
@@ -203,14 +209,12 @@ class SunoArchiver:
             month.mkdir(parents=True, exist_ok=True)
             (month / f"{base}.json").write_text(json.dumps(c, indent=2, default=str))
 
-            audio_existing = list(month.glob(f"{base}.mp3"))
-            if audio_existing:
+            if self._has_file(month, base, AUDIO_EXTS):
                 skipped += 1
             elif c.get("audio_url"):
                 jobs.append((c["audio_url"], month, base))
 
-            cover_existing = list(month.glob(f"{base}.jp*g"))
-            if cover_existing:
+            if self._has_file(month, base, IMAGE_EXTS):
                 skipped += 1
             elif c.get("image_url"):
                 jobs.append((c["image_url"], month, base))

@@ -222,6 +222,41 @@ class TestRun(InTempDir):
         finally:
             server.close()
 
+    def test_png_cover_not_redownloaded_on_second_run(self):
+        """Fix A: cover served as image/png written as .png must be skipped on rerun."""
+        def handler(method, path, headers, body):
+            if path.endswith(".mp3"):
+                return (200, {"Content-Type": "audio/mpeg"}, b"mp3bytes")
+            if "/cover/" in path:
+                return (200, {"Content-Type": "image/png"}, b"pngbytes")
+            return (404, {"Content-Type": "text/plain"}, b"nope")
+        server = LocalServer(handler)
+        try:
+            # image_url has no extension — server returns Content-Type image/png
+            c = clip(42, created_at="2026-06-10T00:00:00.000Z",
+                     audio_url=f"{server.url}/42.mp3",
+                     image_url=f"{server.url}/cover/42")
+            api1 = FakeApi([[c]])
+            a1 = SunoArchiver(api1)
+            a1.run()
+            month = Path("suno_archive/2026-06")
+            # First run: exactly one .png file written
+            png_files = list(month.glob("*.png"))
+            self.assertEqual(len(png_files), 1, "expected one .png after first run")
+            self.assertEqual(a1.stats["downloaded"], 2)  # audio + cover
+
+            # Second run with fresh archiver: must skip the png cover, not re-download
+            api2 = FakeApi([[c]])
+            a2 = SunoArchiver(api2)
+            a2.run()
+            # Still exactly one .png, not two
+            png_files_after = list(month.glob("*.png"))
+            self.assertEqual(len(png_files_after), 1, "must not create duplicate .png")
+            self.assertEqual(a2.stats["downloaded"], 0, "nothing should be downloaded on rerun")
+            self.assertEqual(a2.stats["skipped"], 2)
+        finally:
+            server.close()
+
 
 class TestWavPath(InTempDir):
     def _server(self):
