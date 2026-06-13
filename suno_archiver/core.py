@@ -177,6 +177,11 @@ class SunoArchiver:
 
     def download_file(self, url, directory, base_name):
         """Raises on HTTP errors; deletes partial files; returns (path, bytes)."""
+        # https-only in practice; http permitted solely to loopback (test servers).
+        # This still refuses file://, ftp://, and http:// to internal/metadata hosts.
+        parsed = urlparse(str(url))
+        if parsed.scheme != "https" and parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+            raise ValueError(f"refusing non-https URL: {url}")
         resp = requests.get(url, stream=True, timeout=60)
         resp.raise_for_status()
         ext = self._extension_for(url, resp.headers.get("Content-Type"))

@@ -162,6 +162,13 @@ class TestFilenameBaseSecurity(InTempDir):
 
 
 class TestDownloadFile(InTempDir):
+    def test_non_https_url_is_refused(self):
+        """Fix D: only https URLs are fetched (defense-in-depth vs SSRF)."""
+        a = SunoArchiver(FakeApi([]))
+        with self.assertRaises(ValueError):
+            a.download_file("http://insecure.example/x.mp3", Path("."), "out")
+        self.assertEqual(list(Path(".").iterdir()), [])
+
     def test_http_error_raises_and_leaves_no_file(self):
         def handler(method, path, headers, body):
             return (404, {"Content-Type": "text/plain"}, b"gone")
