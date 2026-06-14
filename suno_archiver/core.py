@@ -15,7 +15,10 @@ from .suno_api import SunoApiError
 STATE_FILENAME = ".suno-archiver-state.json"
 DOWNLOAD_CONCURRENCY = 4
 
-AUDIO_EXTS = ("mp3", "m4a", "ogg", "opus", "flac", "aac", "wav")
+# Primary-audio extensions (the audio_url download). WAV is a SEPARATE deliverable
+# with its own `.wav` skip check, so it's deliberately excluded here — a stray .wav
+# must not suppress re-downloading a missing MP3.
+AUDIO_EXTS = ("mp3", "m4a", "ogg", "opus", "flac", "aac")
 IMAGE_EXTS = ("jpg", "jpeg", "png", "webp", "gif")
 
 

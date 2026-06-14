@@ -251,6 +251,24 @@ class TestRun(InTempDir):
         finally:
             server.close()
 
+    def test_stray_wav_does_not_suppress_mp3_download(self):
+        """A pre-existing .wav must not count as the primary audio: the MP3 is
+        still downloaded (wav is a separate deliverable)."""
+        server = self._server()
+        try:
+            c = clip(1, created_at="2026-06-10T00:00:00.000Z",
+                     audio_url=f"{server.url}/1.mp3", image_url=f"{server.url}/1.jpeg")
+            a = SunoArchiver(FakeApi([[c]]))
+            month = Path("suno_archive/2026-06")
+            month.mkdir(parents=True, exist_ok=True)
+            base = a.filename_base(c)
+            (month / f"{base}.wav").write_text("preexisting wav")
+            a.run()
+            self.assertEqual(len(list(month.glob("*.mp3"))), 1,
+                             "MP3 must download even though a .wav already exists")
+        finally:
+            server.close()
+
     def test_no_art_skips_cover_downloads(self):
         """want_art=False: no cover .jpg is fetched, but audio + metadata still land."""
         server = self._server()
