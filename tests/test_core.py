@@ -251,6 +251,16 @@ class TestRun(InTempDir):
         finally:
             server.close()
 
+    def test_caught_up_complete_fetch_advances_watermark(self):
+        """Fix E: a complete fetch that matches zero clips still saves state, so a
+        caught-up --last-run advances its watermark instead of re-scanning forever."""
+        a = SunoArchiver(FakeApi([[]]))  # empty library, fetch completes cleanly
+        a.run()
+        state_path = Path("suno_archive/.suno-archiver-state.json")
+        self.assertTrue(state_path.exists(), "complete fetch should save state even with 0 clips")
+        state = json.loads(state_path.read_text())
+        self.assertEqual(state["last_successful_run"], a.fetch_start_time)
+
     def test_png_cover_not_redownloaded_on_second_run(self):
         """Fix A: cover served as image/png written as .png must be skipped on rerun."""
         def handler(method, path, headers, body):

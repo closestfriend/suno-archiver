@@ -266,6 +266,9 @@ class SunoArchiver:
                 print("Could not fetch your library — see the error above.")
             else:
                 print("No clips matched.")
+                # Advance the watermark: a caught-up --last-run shouldn't re-scan
+                # from the same point forever.
+                self.save_state({"last_successful_run": self.fetch_start_time, "total_clips": 0})
             return
 
         self._write_index()
