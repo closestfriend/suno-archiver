@@ -21,13 +21,14 @@ IMAGE_EXTS = ("jpg", "jpeg", "png", "webp", "gif")
 
 class SunoArchiver:
     def __init__(self, api, archive_dir="suno_archive", since=None, until=None,
-                 last_run=False, want_wav=False):
+                 last_run=False, want_wav=False, want_art=True):
         self.api = api
         self.archive_dir = Path(archive_dir)
         self.since = self.parse_date(since) if since else None
         self.until = self.parse_date(until) if until else None
         self.last_run = last_run
         self.want_wav = want_wav
+        self.want_art = want_art
         self.clips = []
         self.fetch_complete = False
         self.fetch_start_time = None
@@ -222,10 +223,11 @@ class SunoArchiver:
             elif c.get("audio_url"):
                 jobs.append((c["audio_url"], month, base))
 
-            if self._has_file(month, base, IMAGE_EXTS):
-                skipped += 1
-            elif c.get("image_url"):
-                jobs.append((c["image_url"], month, base))
+            if self.want_art:
+                if self._has_file(month, base, IMAGE_EXTS):
+                    skipped += 1
+                elif c.get("image_url"):
+                    jobs.append((c["image_url"], month, base))
 
             if self.want_wav:
                 if list(month.glob(f"{base}.wav")):

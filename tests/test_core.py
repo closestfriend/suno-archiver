@@ -251,6 +251,22 @@ class TestRun(InTempDir):
         finally:
             server.close()
 
+    def test_no_art_skips_cover_downloads(self):
+        """want_art=False: no cover .jpg is fetched, but audio + metadata still land."""
+        server = self._server()
+        try:
+            c = clip(1, created_at="2026-06-10T00:00:00.000Z",
+                     audio_url=f"{server.url}/1.mp3", image_url=f"{server.url}/1.jpeg")
+            a = SunoArchiver(FakeApi([[c]]), want_art=False)
+            a.run()
+            month = Path("suno_archive/2026-06")
+            self.assertEqual(len(list(month.glob("*.mp3"))), 1)
+            self.assertEqual(len(list(month.glob("*.json"))), 1)
+            self.assertEqual(len(list(month.glob("*.jpg")) + list(month.glob("*.jpeg"))), 0,
+                             "no cover art should be downloaded with want_art=False")
+        finally:
+            server.close()
+
     def test_caught_up_complete_fetch_advances_watermark(self):
         """Fix E: a complete fetch that matches zero clips still saves state, so a
         caught-up --last-run advances its watermark instead of re-scanning forever."""
