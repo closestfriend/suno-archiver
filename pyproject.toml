@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "suno-archiver"
-version = "1.0.0"
+version = "1.0.1"
 description = "Archive your Suno music library: audio, cover art, and complete metadata, with incremental sync"
 readme = "README.md"
 license = "MIT"
@@ -13,7 +13,7 @@ authors = [
 ]
 keywords = ["suno", "ai-music", "downloader", "backup", "archive", "cli", "music-generation"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -24,7 +24,7 @@ dependencies = [
     "requests>=2.28.0",
     "click>=8.0.0",
     "python-dotenv>=1.0.0",
-    "rookiepy>=0.5.0",
+    "rookiepy>=0.5.0,<1.0.0",
 ]
 
 [project.scripts]

@@ -17,7 +17,7 @@ class TestCli(unittest.TestCase):
     def test_version_flag(self):
         result = CliRunner().invoke(main, ["--version"])
         self.assertEqual(result.exit_code, 0)
-        self.assertIn("1.0.0", result.output)
+        self.assertIn("1.0.1", result.output)
 
     def test_archive_invokes_core_and_exits_nonzero_on_total_failure(self):
         fake = MagicMock()

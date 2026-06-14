@@ -75,6 +75,7 @@ Then run `suno-archiver doctor` to confirm it's working.
 ```bash
 suno-archiver                      # full archive: MP3s + covers + metadata
 suno-archiver --wav                # also WAVs (slower: conversion per song)
+suno-archiver --no-art             # skip cover art (audio + metadata only)
 suno-archiver --last-run           # only what's new since the last run
 suno-archiver --since "2 weeks ago"
 suno-archiver --dir ~/Music/suno_archive

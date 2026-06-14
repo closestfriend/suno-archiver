@@ -55,7 +55,8 @@ suno-archiver                       # full archive: MP3s + covers + metadata
 suno-archiver --dir ~/Music/suno    # choose the destination directory
 suno-archiver --last-run            # incremental: only what's new since last run
 suno-archiver --since "2 weeks ago" # date-bounded (also --until)
-suno-archiver --wav                 # also fetch lossless WAVs (slow; paid plan)
+suno-archiver --wav                 # also fetch lossless WAVs (slow: conversion per song)
+suno-archiver --no-art              # skip cover art (audio + metadata only)
 ```
 
 Run `suno-archiver --help` for all flags. Re-runs are **idempotent** — existing
