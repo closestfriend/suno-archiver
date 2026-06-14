@@ -49,11 +49,21 @@ class SunoApi:
         project_clips[].clip, so we translate here.
         """
         data = self._request("GET", f"{LIBRARY_PATH}?page={page + 1}")
-        if isinstance(data, dict) and "project_clips" in data:
-            return [item["clip"] for item in data["project_clips"] if item.get("clip")]
+        if isinstance(data, list):
+            return data
         if isinstance(data, dict):
-            return data.get("clips") or data.get("results") or []
-        return data or []
+            # Known shapes: the current `project_clips` wrapper (empty list = end
+            # of pagination, a legitimate result), or `clips`/`results` fallbacks.
+            if "project_clips" in data:
+                return [item["clip"] for item in data["project_clips"] if item.get("clip")]
+            if "clips" in data or "results" in data:
+                return data.get("clips") or data.get("results") or []
+        # Anything else: fail loud rather than silently producing an empty archive.
+        raise SunoApiError(
+            -1,
+            "unexpected library response shape from Suno — they may have changed "
+            "their API. Run `suno-archiver doctor` or update suno-archiver.",
+        )
 
     def request_wav(self, clip_id: str) -> None:
         self._request("POST", f"/api/gen/{clip_id}/convert_wav/")

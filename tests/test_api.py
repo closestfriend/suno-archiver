@@ -161,6 +161,31 @@ class TestLibraryEndpoint(unittest.TestCase):
         finally:
             server.close()
 
+    def test_clips_or_results_fallback_shapes_still_work(self):
+        for key in ("clips", "results"):
+            def handler(method, path, headers, body, _k=key):
+                return json_response(200, {_k: [{"id": "x"}]})
+            server = LocalServer(handler)
+            try:
+                api = SunoApi(FakeSession(), base_url=server.url)
+                self.assertEqual(api.list_library(page=0), [{"id": "x"}], key)
+            finally:
+                server.close()
+
+    def test_unrecognized_shape_fails_loud_not_silent_empty(self):
+        """Fix B: an unknown response shape must raise (diagnosable), not silently
+        return [] and produce an empty archive."""
+        def handler(method, path, headers, body):
+            return json_response(200, {"songs": [{"id": "x"}], "total": 1})
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            with self.assertRaises(SunoApiError) as ctx:
+                api.list_library(page=0)
+            self.assertIn("shape", str(ctx.exception).lower())
+        finally:
+            server.close()
+
 
 if __name__ == "__main__":
     unittest.main()
