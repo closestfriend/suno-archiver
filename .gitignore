@@ -11,3 +11,4 @@ suno_archive/
 suno_archive_*/
 .suno-archiver-state.json
 .DS_Store
+demo_archive/

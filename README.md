@@ -2,6 +2,8 @@
 
 Archive your entire Suno music library — MP3 audio, cover art, and full metadata — with one command.
 
+![suno-archiver in action](demo.gif)
+
 ## Why
 
 Suno's web UI only lets you download tracks one at a time. If you've generated more than a handful, pulling them all by hand is tedious-to-impossible. This tool grabs your **entire** library in one command — audio, cover art, and full metadata as JSON — organized on your own disk.
