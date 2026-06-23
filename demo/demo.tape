@@ -28,10 +28,10 @@ Sleep 800ms
 Show
 
 # --- Beat 1 · the hook ---
-Type "# 1,600+ songs in Suno — downloadable one... at... a... time."
-Sleep 700ms
+Type "# suno only lets you download one song at a time"
+Sleep 500ms
 Enter
-Sleep 1200ms
+Sleep 1000ms
 
 # --- Beat 2 · the hero: one command, the counter floods, zero errors ---
 Type "suno-archiver --since '2 weeks ago' --no-art --dir suno_backup"
