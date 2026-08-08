@@ -77,6 +77,22 @@ def doctor():
                    "changed their API. Check for a newer suno-archiver release.")
         sys.exit(1)
 
+    # Without this, a broken endpoint degrades silently to the unassigned
+    # bucket -- which is how 1.x missed most of a library without erroring.
+    click.echo("4. Enumerating workspaces...")
+    try:
+        projects = api.list_projects()
+        total = sum(p["clip_count"] for p in projects
+                    if isinstance(p.get("clip_count"), int))
+        click.echo(f"   ok: {len(projects)} workspace(s)"
+                   + (f", {total} clips filed across them" if total else ""))
+    except SunoApiError as e:
+        click.echo(f"   FAIL: {e}")
+        click.echo("   Auth and the feed work, but workspaces can't be listed — "
+                   "a run would archive ONLY your unassigned clips and miss "
+                   "anything filed into a workspace. Check for a newer release.")
+        sys.exit(1)
+
     click.echo("\nAll good. You're ready to run: suno-archiver")
 
 

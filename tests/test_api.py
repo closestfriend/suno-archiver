@@ -187,5 +187,78 @@ class TestLibraryEndpoint(unittest.TestCase):
             server.close()
 
 
+class TestListProjects(unittest.TestCase):
+    def test_paginates_until_total_reached(self):
+        paths = []
+        def handler(method, path, headers, body):
+            paths.append(path)
+            page = int(path.split("page=")[1])
+            if page == 1:
+                return json_response(200, {"num_total_results": 3, "current_page": 1,
+                                           "projects": [{"id": "a", "name": "BEATS"},
+                                                        {"id": "b", "name": "HOUSE"}]})
+            return json_response(200, {"num_total_results": 3, "current_page": 2,
+                                       "projects": [{"id": "c", "name": "VOCALS"}]})
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            projects = api.list_projects()
+            self.assertEqual([p["id"] for p in projects], ["a", "b", "c"])
+            self.assertEqual([p["name"] for p in projects], ["BEATS", "HOUSE", "VOCALS"])
+            self.assertEqual(len(paths), 2)  # stopped once total was reached
+        finally:
+            server.close()
+
+    def test_stops_on_empty_page_without_total(self):
+        def handler(method, path, headers, body):
+            page = int(path.split("page=")[1])
+            if page == 1:
+                return json_response(200, {"projects": [{"id": "a", "name": "BEATS"}]})
+            return json_response(200, {"projects": []})
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            self.assertEqual(len(api.list_projects()), 1)
+        finally:
+            server.close()
+
+    def test_duplicate_ids_are_collapsed(self):
+        def handler(method, path, headers, body):
+            page = int(path.split("page=")[1])
+            if page > 2:
+                return json_response(200, {"projects": []})
+            return json_response(200, {"projects": [{"id": "a", "name": "BEATS"}]})
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            self.assertEqual(len(api.list_projects()), 1)
+        finally:
+            server.close()
+
+    def test_unexpected_shape_fails_loud(self):
+        def handler(method, path, headers, body):
+            return json_response(200, ["not", "a", "dict"])
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            with self.assertRaises(SunoApiError):
+                api.list_projects()
+        finally:
+            server.close()
+
+    def test_named_project_hits_its_own_path(self):
+        seen = {}
+        def handler(method, path, headers, body):
+            seen["path"] = path
+            return json_response(200, {"project_clips": []})
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            api.list_library(page=0, project="p-beats")
+            self.assertEqual(seen["path"], "/api/project/p-beats?page=1")
+        finally:
+            server.close()
+
+
 if __name__ == "__main__":
     unittest.main()

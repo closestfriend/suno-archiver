@@ -15,9 +15,11 @@ class TestCli(unittest.TestCase):
         self.assertIn("--last-run", result.output)
 
     def test_version_flag(self):
+        """Assert against the package version, not a literal that goes stale."""
+        from suno_archiver import __version__
         result = CliRunner().invoke(main, ["--version"])
         self.assertEqual(result.exit_code, 0)
-        self.assertIn("1.0.1", result.output)
+        self.assertIn(__version__, result.output)
 
     def test_archive_invokes_core_and_exits_nonzero_on_total_failure(self):
         fake = MagicMock()

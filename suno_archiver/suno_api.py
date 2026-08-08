@@ -5,7 +5,14 @@ import time
 import requests
 
 STUDIO_BASE = "https://studio-api.prod.suno.com"
-LIBRARY_PATH = "/api/project/default"  # the owned "My Workspace" default project (1-indexed pages)
+
+# Suno files every clip into exactly one workspace ("project"). The `default`
+# project is only the *unassigned* bucket -- Suno labels it "Workspace for
+# unassigned clips" -- so fetching it alone silently misses everything the user
+# has filed into a named workspace. PROJECTS_PATH enumerates them all.
+DEFAULT_PROJECT = "default"
+PROJECT_PATH = "/api/project/{project}"  # 1-indexed pages
+PROJECTS_PATH = "/api/project/me"  # the caller's workspaces, paginated
 
 
 class SunoApiError(Exception):
@@ -41,14 +48,44 @@ class SunoApi:
         except ValueError:
             raise SunoApiError(-1, f"non-JSON response from Suno (HTTP {resp.status_code})")
 
-    def list_library(self, page: int) -> list:
-        """One page (~20 clips) of the user's library, newest first.
+    def list_projects(self) -> list:
+        """Every workspace the caller owns, as [{"id", "name", "clip_count"}].
+
+        Paginated. Excludes nothing: the default/unassigned bucket is fetched
+        separately via list_library(project="default"), and callers must
+        de-duplicate by clip id because Suno also surfaces that bucket here
+        under its display name ("My Workspace").
+        """
+        projects, page, seen = [], 1, set()
+        while True:
+            data = self._request("GET", f"{PROJECTS_PATH}?page={page}")
+            if not isinstance(data, dict):
+                raise SunoApiError(-1, "unexpected workspace response shape from Suno")
+            batch = data.get("projects") or []
+            if not batch:
+                break
+            for p in batch:
+                pid = p.get("id")
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    projects.append({"id": pid, "name": p.get("name") or "untitled",
+                                     "clip_count": p.get("clip_count")})
+            total = data.get("num_total_results")
+            if isinstance(total, int) and len(projects) >= total:
+                break
+            page += 1
+        return projects
+
+    def list_library(self, page: int, project: str = DEFAULT_PROJECT) -> list:
+        """One page (~20 clips) of a workspace, newest first.
 
         `page` is 0-indexed per this method's contract; an empty list means
         past the end. The Suno endpoint is 1-indexed and nests each clip under
-        project_clips[].clip, so we translate here.
+        project_clips[].clip, so we translate here. `project` defaults to the
+        unassigned bucket; pass an id from list_projects() for a named workspace.
         """
-        data = self._request("GET", f"{LIBRARY_PATH}?page={page + 1}")
+        path = PROJECT_PATH.format(project=project)
+        data = self._request("GET", f"{path}?page={page + 1}")
         if isinstance(data, list):
             return data
         if isinstance(data, dict):

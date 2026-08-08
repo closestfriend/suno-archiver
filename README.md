@@ -16,7 +16,13 @@ Useful if you:
 
 Run it on a schedule with `--last-run` and the archive stays current automatically.
 
-> **Tested at scale.** A full **1,668-track library** spanning two years (2024–2026) archived in a single run — **5.7 GB**, 99.9% success rate, no rate-limiting or throttling. The handful of missing files were dead/transient links on Suno's CDN, not failures of the tool — and a re-run picks them up.
+It archives **every workspace**, not just your unassigned clips — see the warning below if you used version 1.x.
+
+> **Verified working: 2026-08-08.** Re-confirmed end to end against Suno's current API on a Pro account — browser-session detection, Clerk token exchange, workspace enumeration, and a live archive run, plus idempotent re-runs and `--last-run` incremental sync.
+
+> ⚠️ **If you used version 1.x, your archive is incomplete.** Every release through 1.0.1 fetched only Suno's `default` project — which is just the *unassigned clips* bucket — so anything you filed into a named workspace was silently skipped, with the run still reporting `0 errors`. On the 4,257-clip library this was measured against, 1.0.1 retrieved 1,768 and missed **2,489 tracks (58%)**. Upgrade with `pip install -U suno-archiver` and re-run. Fixed in 2.0.0, which also changes the archive layout — see [CHANGELOG](CHANGELOG.md).
+
+> **Tested at scale.** A **1,668-track** single run — **5.7 GB**, 99.9% success rate, no rate-limiting or throttling. The handful of missing files were dead/transient links on Suno's CDN, not failures of the tool — and a re-run picks them up. Workspace enumeration is verified against a **4,257-clip library spanning 19 workspaces** and two years (2024–2026).
 
 ## What it grabs
 
@@ -90,15 +96,29 @@ Re-runs are **idempotent** — existing files are skipped, so `--last-run` on a 
 
 ```
 suno_archive/
-├── 2026-06/
-│   ├── 2026-06-02_concrete-syncope_49291ca0.mp3
-│   ├── 2026-06-02_concrete-syncope_49291ca0.jpg     (cover art)
-│   └── 2026-06-02_concrete-syncope_49291ca0.json    (full metadata)
+├── BEATS/                                               (a Suno workspace)
+│   └── 2026-06/
+│       ├── 2026-06-02_concrete-syncope_49291ca0.mp3
+│       ├── 2026-06-02_concrete-syncope_49291ca0.jpg     (cover art)
+│       └── 2026-06-02_concrete-syncope_49291ca0.json    (full metadata)
+├── HOUSE_SYNTHPOP_RETRO/                                (slashes flattened to _)
+│   └── 2026-05/
+├── _unassigned/                                         (Suno's default project)
+│   └── 2026-06/
 ├── library_index.json    (everything, searchable with jq/grep)
 └── .suno-archiver-state.json
 ```
 
-Songs are organized into `YYYY-MM/` month folders. The state file records the last run timestamp for `--last-run` incremental syncs.
+Songs are organized by **workspace**, then into `YYYY-MM/` month folders. Clips you never filed anywhere land in `_unassigned/`. Workspace names are reduced to a single safe path segment, so `HOUSE/SYNTHPOP/RETRO` becomes one folder rather than three nested ones.
+
+Each clip's JSON carries a `workspace` field, and `library_index.json` includes a per-workspace count summary:
+
+```bash
+jq '.workspaces' suno_archive/library_index.json
+jq '.clips[] | select(.workspace=="BEATS") | .title' suno_archive/library_index.json
+```
+
+The state file records the last run timestamp for `--last-run` incremental syncs.
 
 ## Resilient by design
 
@@ -110,6 +130,17 @@ Archiving thousands of files over an undocumented API means things will occasion
 - **Re-runs are free.** Idempotent skipping means re-running after a partial failure costs nothing for already-downloaded files; only the gaps are retried.
 
 If the tool ever stops working entirely (Suno changed their API), `suno-archiver doctor` tells you *which* layer broke — your login, the auth exchange, or the library endpoint — so you know whether to re-log-in or wait for an update.
+
+## Development
+
+```bash
+git clone https://github.com/closestfriend/suno-archiver
+cd suno-archiver
+pip install -e ".[dev]"
+pytest
+```
+
+The test suite is fully offline — no network, no credentials, no Suno account needed.
 
 ## Related
 

@@ -15,6 +15,13 @@ from .suno_api import SunoApiError
 STATE_FILENAME = ".suno-archiver-state.json"
 DOWNLOAD_CONCURRENCY = 4
 
+# Folder for Suno's default project (its unassigned-clips bucket). Leading
+# underscore sorts it apart from real workspace names.
+UNASSIGNED_DIRNAME = "_unassigned"
+# Key added to each clip recording which workspace it came from. Not a Suno
+# field -- we set it so the on-disk JSON and library_index stay queryable.
+WORKSPACE_KEY = "workspace"
+
 # Primary-audio extensions (the audio_url download). WAV is a SEPARATE deliverable
 # with its own `.wav` skip check, so it's deliberately excluded here — a stray .wav
 # must not suppress re-downloading a missing MP3.
@@ -34,6 +41,7 @@ class SunoArchiver:
         self.want_art = want_art
         self.clips = []
         self.fetch_complete = False
+        self.workspaces_complete = True
         self.fetch_start_time = None
 
     # ---- dates (timezone-aware UTC everywhere; naive local time corrupts watermarks)
@@ -94,34 +102,78 @@ class SunoArchiver:
         print(f"Archiving clips created since last run: {since.isoformat()}")
         return since
 
+    def _workspaces(self):
+        """[(project_id, folder_name)] -- unassigned bucket first, then named.
+
+        A failure to enumerate must not reduce us to archiving nothing, so we
+        fall back to the unassigned bucket alone and report the run incomplete.
+        """
+        default = (None, UNASSIGNED_DIRNAME)
+        try:
+            projects = self.api.list_projects()
+        except SunoApiError as e:
+            print(f"WARNING: could not list workspaces ({e}).")
+            print("Falling back to the unassigned bucket only — this run will be "
+                  "INCOMPLETE and last-run state will NOT be saved.")
+            self.workspaces_complete = False
+            return [default]
+        self.workspaces_complete = True
+        print(f"Found {len(projects)} workspace(s) plus the unassigned bucket.")
+        return [default] + [(p["id"], p["name"]) for p in projects]
+
+    def _fetch_workspace(self, project_id, label, since, seen):
+        """Clips from one workspace, newest-first, honoring since/until.
+
+        `seen` is the run-wide set of clip ids: Suno lists the unassigned bucket
+        a second time under its display name, and a clip could in principle sit
+        in two workspaces, so first workspace to yield a clip owns it.
+
+        Clips are appended to self.clips as each page arrives, so an error
+        partway through keeps everything already retrieved.
+        """
+        kept, page, past_since = 0, 0, False
+        while True:
+            kwargs = {} if project_id is None else {"project": project_id}
+            clips = self.api.list_library(page, **kwargs)
+            if not clips:
+                break
+            for c in clips:
+                created = self._clip_created_at(c)
+                if since and created and created < since:
+                    past_since = True  # results are newest-first
+                    break
+                if self.until and created and created > self.until:
+                    continue
+                cid = c.get("id")
+                if cid and cid in seen:
+                    continue
+                if cid:
+                    seen.add(cid)
+                c[WORKSPACE_KEY] = label
+                self.clips.append(c)
+                kept += 1
+            if past_since:
+                break
+            page += 1
+        return kept
+
     def fetch_all_clips(self):
         self.clips = []
         since = self._resolve_since()
         # Watermark = fetch start: anything created later is the next run's job.
         self.fetch_start_time = datetime.now(timezone.utc).isoformat()
         self.fetch_complete = False
-        page = 0
-        past_since = False
+        self.workspaces_complete = True
+        seen = set()
+        workspaces = self._workspaces()
         try:
-            while True:
-                clips = self.api.list_library(page)
-                if not clips:
-                    break
-                print(f"Fetched page {page + 1}: {len(clips)} clips")
-                for c in clips:
-                    created = self._clip_created_at(c)
-                    if since and created and created < since:
-                        past_since = True  # results are newest-first
-                        break
-                    if self.until and created and created > self.until:
-                        continue
-                    self.clips.append(c)
-                if past_since:
-                    break
-                page += 1
-            self.fetch_complete = True
+            for project_id, label in workspaces:
+                kept = self._fetch_workspace(project_id, label, since, seen)
+                if kept:
+                    print(f"  {label}: {kept} clips")
+            self.fetch_complete = self.workspaces_complete
         except SunoApiError as e:
-            print(f"Error fetching page {page + 1}: {e}")
+            print(f"Error fetching workspace clips: {e}")
             print("Fetch incomplete; continuing with what was retrieved. "
                   "Last-run state will NOT be saved.")
         print(f"Total clips fetched: {len(self.clips)}")
@@ -157,10 +209,26 @@ class SunoArchiver:
     def _has_file(self, month, base, exts):
         return any((month / f"{base}.{ext}").exists() for ext in exts)
 
+    def _workspace_dirname(self, name, max_length=60):
+        """Workspace name -> one safe path segment, readability preserved.
+
+        Unlike _sanitize (filenames: lowercased and hyphenated) this keeps case
+        and spaces, because these are top-level folders the user browses. Path
+        separators and reserved characters become "_" so a name like
+        "HOUSE/SYNTHPOP/RETRO" can't fan out into nested directories -- or, as
+        ".." would, climb out of the archive entirely.
+        """
+        s = re.sub(r'[/\\:*?"<>|\x00-\x1f]', "_", str(name or ""))
+        s = re.sub(r"\s+", " ", s).strip(" .")  # trailing dots/spaces break Windows
+        if not s or set(s) <= {".", "_", " "}:
+            return "untitled-workspace"
+        return s[:max_length].strip(" .") or "untitled-workspace"
+
     def _month_dir(self, c):
         created = self._clip_created_at(c)
         bucket = created.strftime("%Y-%m") if created else "unknown-date"
-        return self.archive_dir / bucket
+        workspace = self._workspace_dirname(c.get(WORKSPACE_KEY) or UNASSIGNED_DIRNAME)
+        return self.archive_dir / workspace / bucket
 
     # Normalize common extension aliases so globs like *.jpg stay consistent.
     _EXT_ALIASES = {".jpeg": ".jpg", ".jpe": ".jpg", ".tiff": ".tif"}
@@ -254,9 +322,14 @@ class SunoArchiver:
         return self.download_file(url, directory, base)
 
     def _write_index(self):
+        counts = {}
+        for c in self.clips:
+            label = c.get(WORKSPACE_KEY) or UNASSIGNED_DIRNAME
+            counts[label] = counts.get(label, 0) + 1
         index = {
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "total_clips": len(self.clips),
+            "workspaces": dict(sorted(counts.items(), key=lambda kv: -kv[1])),
             "clips": self.clips,
         }
         self.archive_dir.mkdir(parents=True, exist_ok=True)

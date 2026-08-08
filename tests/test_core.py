@@ -12,17 +12,35 @@ from suno_archiver.core import SunoArchiver
 
 
 class FakeApi:
-    """Pages of clips; raises queued exceptions."""
+    """Pages of clips; raises queued exceptions.
 
-    def __init__(self, pages, wav_url=None):
+    `pages` serves the default/unassigned bucket. `workspaces` maps a project
+    id to its own page list, and `projects` is what list_projects() returns --
+    both default to empty, so a bare FakeApi behaves like an account with no
+    named workspaces.
+    """
+
+    def __init__(self, pages, wav_url=None, projects=None, workspaces=None,
+                 projects_error=None):
         self.pages = pages  # list of (list-of-clips | Exception); index = page number
         self.wav_url = wav_url
+        self.projects = projects or []
+        self.workspaces = workspaces or {}
+        self.projects_error = projects_error
         self.wav_requests = []
+        self.library_calls = []
 
-    def list_library(self, page):
-        if page >= len(self.pages):
+    def list_projects(self):
+        if self.projects_error:
+            raise self.projects_error
+        return self.projects
+
+    def list_library(self, page, project=None):
+        self.library_calls.append((page, project))
+        pages = self.pages if project is None else self.workspaces.get(project, [])
+        if page >= len(pages):
             return []
-        item = self.pages[page]
+        item = pages[page]
         if isinstance(item, Exception):
             raise item
         return item
@@ -214,7 +232,7 @@ class TestRun(InTempDir):
         try:
             a = SunoArchiver(FakeApi([self._clips(server.url)]))
             a.run()
-            month = Path("suno_archive/2026-06")
+            month = Path("suno_archive/_unassigned/2026-06")
             self.assertEqual(len(list(month.glob("*.mp3"))), 3)
             self.assertEqual(len(list(month.glob("*.jpg"))), 3)
             self.assertEqual(len(list(month.glob("*.json"))), 3)
@@ -259,7 +277,7 @@ class TestRun(InTempDir):
             c = clip(1, created_at="2026-06-10T00:00:00.000Z",
                      audio_url=f"{server.url}/1.mp3", image_url=f"{server.url}/1.jpeg")
             a = SunoArchiver(FakeApi([[c]]))
-            month = Path("suno_archive/2026-06")
+            month = Path("suno_archive/_unassigned/2026-06")
             month.mkdir(parents=True, exist_ok=True)
             base = a.filename_base(c)
             (month / f"{base}.wav").write_text("preexisting wav")
@@ -277,7 +295,7 @@ class TestRun(InTempDir):
                      audio_url=f"{server.url}/1.mp3", image_url=f"{server.url}/1.jpeg")
             a = SunoArchiver(FakeApi([[c]]), want_art=False)
             a.run()
-            month = Path("suno_archive/2026-06")
+            month = Path("suno_archive/_unassigned/2026-06")
             self.assertEqual(len(list(month.glob("*.mp3"))), 1)
             self.assertEqual(len(list(month.glob("*.json"))), 1)
             self.assertEqual(len(list(month.glob("*.jpg")) + list(month.glob("*.jpeg"))), 0,
@@ -312,7 +330,7 @@ class TestRun(InTempDir):
             api1 = FakeApi([[c]])
             a1 = SunoArchiver(api1)
             a1.run()
-            month = Path("suno_archive/2026-06")
+            month = Path("suno_archive/_unassigned/2026-06")
             # First run: exactly one .png file written
             png_files = list(month.glob("*.png"))
             self.assertEqual(len(png_files), 1, "expected one .png after first run")
@@ -355,7 +373,7 @@ class TestWavPath(InTempDir):
             api = FakeApi([[c]])
             a = SunoArchiver(api, want_wav=True)
             a.run()
-            month = Path("suno_archive/2026-06")
+            month = Path("suno_archive/_unassigned/2026-06")
             self.assertEqual(len(list(month.glob("*.wav"))), 1)
             self.assertEqual(api.wav_requests, [])
         finally:
@@ -373,7 +391,7 @@ class TestWavPath(InTempDir):
             api = FakeApi([[c]], wav_url=wav_url)
             a = SunoArchiver(api, want_wav=True)
             a.run()
-            month = Path("suno_archive/2026-06")
+            month = Path("suno_archive/_unassigned/2026-06")
             self.assertEqual(len(list(month.glob("*.wav"))), 1)
             self.assertEqual(api.wav_requests, ["clip-0001-aaaa-bbbb"])
         finally:
@@ -394,6 +412,110 @@ class TestWavPath(InTempDir):
             self.assertEqual(api.wav_requests, [])
         finally:
             server.close()
+
+
+class TestWorkspaces(InTempDir):
+    """Suno files clips into workspaces; `default` is only the unassigned bucket.
+
+    Fetching default alone silently misses everything filed elsewhere -- the
+    regression these tests exist to prevent.
+    """
+
+    def _api(self, **over):
+        return FakeApi(
+            [[clip(1)]],
+            projects=[{"id": "p-beats", "name": "BEATS"},
+                      {"id": "p-house", "name": "HOUSE"}],
+            workspaces={"p-beats": [[clip(2)]], "p-house": [[clip(3)]]},
+            **over,
+        )
+
+    def test_clips_from_named_workspaces_are_archived(self):
+        a = SunoArchiver(self._api())
+        a.fetch_all_clips()
+        self.assertEqual(sorted(c["id"] for c in a.clips),
+                         ["clip-0001-aaaa-bbbb", "clip-0002-aaaa-bbbb",
+                          "clip-0003-aaaa-bbbb"])
+        self.assertTrue(a.fetch_complete)
+
+    def test_every_workspace_is_queried(self):
+        a = SunoArchiver(self._api())
+        a.fetch_all_clips()
+        queried = {proj for _, proj in a.api.library_calls}
+        self.assertEqual(queried, {None, "p-beats", "p-house"})
+
+    def test_clip_in_two_workspaces_is_archived_once(self):
+        """Suno lists the unassigned bucket again under its display name."""
+        dupe = clip(1)
+        api = FakeApi([[dupe]],
+                      projects=[{"id": "p-mine", "name": "My Workspace"}],
+                      workspaces={"p-mine": [[clip(1)]]})
+        a = SunoArchiver(api)
+        a.fetch_all_clips()
+        self.assertEqual(len(a.clips), 1)
+        # First workspace to yield it owns it -- the unassigned bucket goes first.
+        self.assertEqual(a.clips[0]["workspace"], "_unassigned")
+
+    def test_workspace_recorded_on_clip_and_summarised_in_index(self):
+        a = SunoArchiver(self._api())
+        a.fetch_all_clips()
+        a._write_index()
+        index = json.loads(Path("suno_archive/library_index.json").read_text())
+        self.assertEqual(index["workspaces"],
+                         {"_unassigned": 1, "BEATS": 1, "HOUSE": 1})
+
+    def test_failure_to_list_workspaces_falls_back_without_saving_state(self):
+        """Degrade to the unassigned bucket, but never claim the run was complete."""
+        from suno_archiver.suno_api import SunoApiError
+        a = SunoArchiver(self._api(projects_error=SunoApiError(500, "boom")))
+        a.fetch_all_clips()
+        self.assertEqual(len(a.clips), 1)  # default bucket still archived
+        self.assertFalse(a.fetch_complete)
+        self.assertFalse(Path("suno_archive/.suno-archiver-state.json").exists())
+
+
+class TestWorkspaceDirnames(InTempDir):
+    def _dirname(self, name):
+        return SunoArchiver(FakeApi([]))._workspace_dirname(name)
+
+    def test_readability_preserved(self):
+        self.assertEqual(self._dirname("BEATS"), "BEATS")
+        self.assertEqual(self._dirname("nu workspace / VOCALS"),
+                         "nu workspace _ VOCALS")
+
+    def test_separators_cannot_nest_directories(self):
+        self.assertEqual(self._dirname("HOUSE/SYNTHPOP/RETRO"),
+                         "HOUSE_SYNTHPOP_RETRO")
+        self.assertEqual(self._dirname("a\\b"), "a_b")
+
+    def test_traversal_names_cannot_escape_the_archive(self):
+        """The property that matters is containment, not the absence of dots.
+
+        "../../etc" flattening to "_.._etc" is fine: separators are gone, so it
+        is one inert segment. What must never happen is a resolved path landing
+        outside the archive root.
+        """
+        root = Path("suno_archive").resolve()
+        for hostile in ("..", "../..", "../../etc", ".", "....//"):
+            with self.subTest(hostile=hostile):
+                out = self._dirname(hostile)
+                self.assertNotIn("/", out)
+                self.assertNotIn("\\", out)
+                self.assertNotIn(out, (".", ".."))
+                resolved = (root / out).resolve()
+                self.assertTrue(resolved.is_relative_to(root))
+                self.assertEqual(resolved.parent, root)  # exactly one level deep
+
+    def test_empty_and_missing_names_fall_back(self):
+        self.assertEqual(self._dirname(""), "untitled-workspace")
+        self.assertEqual(self._dirname(None), "untitled-workspace")
+
+    def test_clip_lands_under_its_workspace_folder(self):
+        a = SunoArchiver(FakeApi([]))
+        c = clip(1, created_at="2026-06-10T00:00:00.000Z")
+        c["workspace"] = "HOUSE/SYNTHPOP/RETRO"
+        self.assertEqual(a._month_dir(c),
+                         Path("suno_archive/HOUSE_SYNTHPOP_RETRO/2026-06"))
 
 
 if __name__ == "__main__":
