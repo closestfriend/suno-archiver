@@ -518,5 +518,136 @@ class TestWorkspaceDirnames(InTempDir):
                          Path("suno_archive/HOUSE_SYNTHPOP_RETRO/2026-06"))
 
 
+class TestIndexMerge(InTempDir):
+    """A partial run must not shrink library_index.json to its own slice.
+
+    Regression: a scheduled `--last-run` used to overwrite a complete index
+    with just the handful of clips that run happened to fetch.
+    """
+
+    def _index(self):
+        return json.loads(Path("suno_archive/library_index.json").read_text())
+
+    def _seed(self, n=5):
+        a = SunoArchiver(FakeApi([[clip(i) for i in range(n)]]))
+        a.fetch_all_clips()
+        a._write_index()
+        return a
+
+    def test_full_run_replaces_index(self):
+        """A full run is authoritative: clips deleted on Suno should drop out."""
+        self._seed(5)
+        a = SunoArchiver(FakeApi([[clip(0)]]))
+        a.fetch_all_clips()
+        a._write_index()
+        self.assertEqual(self._index()["total_clips"], 1)
+
+    def test_last_run_merges_instead_of_clobbering(self):
+        self._seed(5)
+        fresh = clip(99, created_at="2026-07-01T00:00:00.000Z")
+        a = SunoArchiver(FakeApi([[fresh]]), last_run=True)
+        a.fetch_all_clips()
+        a._write_index()
+        index = self._index()
+        self.assertEqual(index["total_clips"], 6)
+        self.assertIn("clip-0099-aaaa-bbbb", {c["id"] for c in index["clips"]})
+
+    def test_since_run_merges(self):
+        self._seed(5)
+        a = SunoArchiver(FakeApi([[clip(99)]]), since="2020-01-01")
+        a.fetch_all_clips()
+        a._write_index()
+        self.assertEqual(self._index()["total_clips"], 6)
+
+    def test_merge_updates_existing_clip_rather_than_duplicating(self):
+        self._seed(5)
+        a = SunoArchiver(FakeApi([[clip(1, title="Renamed")]]), last_run=True)
+        a.fetch_all_clips()
+        a._write_index()
+        index = self._index()
+        self.assertEqual(index["total_clips"], 5)  # no duplicate
+        titles = {c["id"]: c["title"] for c in index["clips"]}
+        self.assertEqual(titles["clip-0001-aaaa-bbbb"], "Renamed")
+
+    def test_merged_index_is_newest_first(self):
+        self._seed(3)
+        a = SunoArchiver(FakeApi([[clip(99, created_at="2027-01-01T00:00:00.000Z")]]),
+                         last_run=True)
+        a.fetch_all_clips()
+        a._write_index()
+        self.assertEqual(self._index()["clips"][0]["id"], "clip-0099-aaaa-bbbb")
+
+    def test_partial_run_with_no_existing_index_just_writes(self):
+        a = SunoArchiver(FakeApi([[clip(1)]]), last_run=True)
+        a.fetch_all_clips()
+        a._write_index()
+        self.assertEqual(self._index()["total_clips"], 1)
+
+    def test_corrupt_existing_index_does_not_abort_the_run(self):
+        Path("suno_archive").mkdir(parents=True, exist_ok=True)
+        Path("suno_archive/library_index.json").write_text("{ not json")
+        a = SunoArchiver(FakeApi([[clip(1)]]), last_run=True)
+        a.fetch_all_clips()
+        a._write_index()  # must not raise
+        self.assertEqual(self._index()["total_clips"], 1)
+
+
+class TestWorkspaceFilter(InTempDir):
+    def _api(self):
+        return FakeApi(
+            [[clip(1)]],
+            projects=[{"id": "p-beats", "name": "BEATS"},
+                      {"id": "p-house", "name": "HOUSE/SYNTHPOP"}],
+            workspaces={"p-beats": [[clip(2)]], "p-house": [[clip(3)]]},
+        )
+
+    def test_only_selected_workspace_is_fetched(self):
+        a = SunoArchiver(self._api(), only_workspaces=["BEATS"])
+        a.fetch_all_clips()
+        self.assertEqual([c["id"] for c in a.clips], ["clip-0002-aaaa-bbbb"])
+        self.assertEqual({p for _, p in a.api.library_calls}, {"p-beats"})
+
+    def test_selection_is_case_insensitive_and_matches_disk_name(self):
+        for name in ("beats", "BEATS", "HOUSE_SYNTHPOP"):
+            with self.subTest(name=name):
+                a = SunoArchiver(self._api(), only_workspaces=[name])
+                a.fetch_all_clips()
+                self.assertEqual(len(a.clips), 1)
+
+    def test_unassigned_bucket_is_selectable(self):
+        a = SunoArchiver(self._api(), only_workspaces=["_unassigned"])
+        a.fetch_all_clips()
+        self.assertEqual([c["id"] for c in a.clips], ["clip-0001-aaaa-bbbb"])
+
+    def test_unknown_workspace_errors_instead_of_archiving_nothing(self):
+        a = SunoArchiver(self._api(), only_workspaces=["NOPE"])
+        with self.assertRaises(ValueError) as ctx:
+            a.fetch_all_clips()
+        self.assertIn("NOPE", str(ctx.exception))
+        self.assertIn("BEATS", str(ctx.exception))  # lists what is available
+
+    def test_filtered_run_does_not_advance_the_watermark(self):
+        """The watermark is global; moving it would orphan unselected workspaces."""
+        a = SunoArchiver(self._api(), only_workspaces=["BEATS"])
+        a.run()
+        self.assertFalse(Path("suno_archive/.suno-archiver-state.json").exists())
+
+    def test_unfiltered_run_still_advances_the_watermark(self):
+        a = SunoArchiver(self._api())
+        a.run()
+        self.assertTrue(Path("suno_archive/.suno-archiver-state.json").exists())
+
+    def test_filtered_run_merges_index_rather_than_shrinking_it(self):
+        full = SunoArchiver(self._api())
+        full.fetch_all_clips()
+        full._write_index()
+        self.assertEqual(json.loads(
+            Path("suno_archive/library_index.json").read_text())["total_clips"], 3)
+        a = SunoArchiver(self._api(), only_workspaces=["BEATS"])
+        a.run()
+        self.assertEqual(json.loads(
+            Path("suno_archive/library_index.json").read_text())["total_clips"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

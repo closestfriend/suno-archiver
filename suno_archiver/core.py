@@ -18,6 +18,8 @@ DOWNLOAD_CONCURRENCY = 4
 # Folder for Suno's default project (its unassigned-clips bucket). Leading
 # underscore sorts it apart from real workspace names.
 UNASSIGNED_DIRNAME = "_unassigned"
+# Sort floor for clips with no parseable created_at, so index ordering is total.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # Key added to each clip recording which workspace it came from. Not a Suno
 # field -- we set it so the on-disk JSON and library_index stay queryable.
 WORKSPACE_KEY = "workspace"
@@ -31,7 +33,7 @@ IMAGE_EXTS = ("jpg", "jpeg", "png", "webp", "gif")
 
 class SunoArchiver:
     def __init__(self, api, archive_dir="suno_archive", since=None, until=None,
-                 last_run=False, want_wav=False, want_art=True):
+                 last_run=False, want_wav=False, want_art=True, only_workspaces=None):
         self.api = api
         self.archive_dir = Path(archive_dir)
         self.since = self.parse_date(since) if since else None
@@ -39,6 +41,7 @@ class SunoArchiver:
         self.last_run = last_run
         self.want_wav = want_wav
         self.want_art = want_art
+        self.only_workspaces = list(only_workspaces or [])
         self.clips = []
         self.fetch_complete = False
         self.workspaces_complete = True
@@ -118,8 +121,38 @@ class SunoArchiver:
             self.workspaces_complete = False
             return [default]
         self.workspaces_complete = True
-        print(f"Found {len(projects)} workspace(s) plus the unassigned bucket.")
-        return [default] + [(p["id"], p["name"]) for p in projects]
+        found = [default] + [(p["id"], p["name"]) for p in projects]
+        if not self.only_workspaces:
+            print(f"Found {len(projects)} workspace(s) plus the unassigned bucket.")
+            return found
+        return self._select(found)
+
+    def _select(self, found):
+        """Narrow to --workspace picks, matching on name or on-disk folder name.
+
+        An unmatched pick is an error, not an empty archive: silently
+        archiving nothing is the exact failure mode this tool already had once.
+        """
+        def keys(label):
+            return {label.casefold(), self._workspace_dirname(label).casefold()}
+
+        wanted = [w.strip() for w in self.only_workspaces if w.strip()]
+        chosen, unmatched = [], []
+        for want in wanted:
+            matches = [ws for ws in found if want.casefold() in keys(ws[1])]
+            if matches:
+                chosen.extend(m for m in matches if m not in chosen)
+            else:
+                unmatched.append(want)
+        if unmatched:
+            available = ", ".join(sorted(label for _, label in found))
+            raise ValueError(
+                f"no such workspace: {', '.join(repr(u) for u in unmatched)}. "
+                f"Available: {available}"
+            )
+        print(f"Archiving {len(chosen)} selected workspace(s): "
+              f"{', '.join(label for _, label in chosen)}")
+        return chosen
 
     def _fetch_workspace(self, project_id, label, since, seen):
         """Clips from one workspace, newest-first, honoring since/until.
@@ -192,6 +225,24 @@ class SunoArchiver:
     def save_state(self, state):
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         self._state_path().write_text(json.dumps(state, indent=2))
+
+    def _save_watermark(self, total_clips):
+        """Advance the --last-run watermark, unless this run skipped workspaces.
+
+        Time filters may advance it -- that is their purpose, and they still
+        scan every workspace. A workspace-filtered run may not: the watermark
+        is global, so moving it would make the next --last-run skip everything
+        older in the workspaces this run never touched.
+        """
+        if self.only_workspaces:
+            print("Workspace-filtered run — last-run state NOT updated "
+                  "(it would skip older clips in the workspaces not selected).")
+            return
+        self.save_state({
+            "last_successful_run": self.fetch_start_time,
+            "total_clips": total_clips,
+        })
+        print("State saved for incremental runs (--last-run).")
 
     # ---- naming and downloads
 
@@ -321,20 +372,62 @@ class SunoArchiver:
             url = self.api.get_wav_url(clip_id)
         return self.download_file(url, directory, base)
 
+    def _index_path(self):
+        return self.archive_dir / "library_index.json"
+
+    def is_partial_run(self):
+        """True when this run deliberately covers only part of the library."""
+        return bool(self.since or self.until or self.last_run or self.only_workspaces)
+
+    def _load_index_clips(self):
+        try:
+            data = json.loads(self._index_path().read_text())
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return []
+        clips = data.get("clips") if isinstance(data, dict) else None
+        return clips if isinstance(clips, list) else []
+
+    def _merge_clips(self, existing, fresh):
+        """Fresh clips win by id; entries the run never looked at are preserved."""
+        by_id, loose = {}, []
+        for c in list(existing) + list(fresh):
+            cid = c.get("id")
+            if cid:
+                by_id[cid] = c  # later (fresh) overwrites earlier (existing)
+            else:
+                loose.append(c)  # no id to merge on; keep rather than drop
+        merged = list(by_id.values()) + loose
+        # Newest-first, matching how Suno returns the library.
+        merged.sort(key=lambda c: (self._clip_created_at(c) or _EPOCH), reverse=True)
+        return merged
+
     def _write_index(self):
+        """Full runs replace the index; partial runs merge into it.
+
+        A full run is authoritative -- clips deleted on Suno should disappear.
+        A partial run is not: overwriting would shrink the index to just that
+        run's slice, which is what a scheduled `--last-run` used to do to a
+        complete archive on every single invocation.
+        """
+        clips = self.clips
+        if self.is_partial_run():
+            existing = self._load_index_clips()
+            if existing:
+                clips = self._merge_clips(existing, self.clips)
+                print(f"Index: merged {len(self.clips)} fetched into "
+                      f"{len(existing)} existing -> {len(clips)} clips.")
         counts = {}
-        for c in self.clips:
+        for c in clips:
             label = c.get(WORKSPACE_KEY) or UNASSIGNED_DIRNAME
             counts[label] = counts.get(label, 0) + 1
         index = {
             "exported_at": datetime.now(timezone.utc).isoformat(),
-            "total_clips": len(self.clips),
+            "total_clips": len(clips),
             "workspaces": dict(sorted(counts.items(), key=lambda kv: -kv[1])),
-            "clips": self.clips,
+            "clips": clips,
         }
         self.archive_dir.mkdir(parents=True, exist_ok=True)
-        (self.archive_dir / "library_index.json").write_text(
-            json.dumps(index, indent=2, default=str))
+        self._index_path().write_text(json.dumps(index, indent=2, default=str))
 
     def run(self):
         self.stats = {"downloaded": 0, "skipped": 0, "errors": 0, "bytes": 0}
@@ -346,7 +439,7 @@ class SunoArchiver:
                 print("No clips matched.")
                 # Advance the watermark: a caught-up --last-run shouldn't re-scan
                 # from the same point forever.
-                self.save_state({"last_successful_run": self.fetch_start_time, "total_clips": 0})
+                self._save_watermark(0)
             return
 
         self._write_index()
@@ -381,10 +474,6 @@ class SunoArchiver:
               f"{self.stats['bytes'] / 1e6:.1f} MB")
 
         if self.fetch_complete:
-            self.save_state({
-                "last_successful_run": self.fetch_start_time,
-                "total_clips": len(self.clips),
-            })
-            print("State saved for incremental runs (--last-run).")
+            self._save_watermark(len(self.clips))
         else:
             print("Fetch was incomplete — last-run state NOT updated. Re-run to retry.")

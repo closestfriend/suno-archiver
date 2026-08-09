@@ -23,10 +23,12 @@ def _build_archiver(**kwargs):
 @click.option("-l", "--last-run", is_flag=True, help="Incremental: only clips since the last successful run")
 @click.option("--wav", is_flag=True, help="Also fetch WAVs (slow: requests conversion per song)")
 @click.option("--no-art", is_flag=True, help="Skip cover art; archive audio + metadata only")
+@click.option("-w", "--workspace", "workspaces", multiple=True,
+              help="Only this workspace (repeatable). See: suno-archiver workspaces")
 @click.option("--dir", "archive_dir", default="suno_archive", show_default=True,
               help="Archive root directory")
 @click.pass_context
-def main(ctx, since, until, last_run, wav, no_art, archive_dir):
+def main(ctx, since, until, last_run, wav, no_art, workspaces, archive_dir):
     """Archive your Suno library: audio, cover art, and complete metadata."""
     load_dotenv()
     if ctx.invoked_subcommand is not None:
@@ -35,13 +37,33 @@ def main(ctx, since, until, last_run, wav, no_art, archive_dir):
         raise click.UsageError("--last-run cannot be combined with --since/--until")
     try:
         archiver = _build_archiver(archive_dir=archive_dir, since=since, until=until,
-                                   last_run=last_run, want_wav=wav, want_art=not no_art)
+                                   last_run=last_run, want_wav=wav, want_art=not no_art,
+                                   only_workspaces=list(workspaces))
         archiver.run()
         if not archiver.clips and not archiver.fetch_complete:
             sys.exit(1)
     except (AuthError, ValueError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@main.command()
+def workspaces():
+    """List your Suno workspaces and their clip counts."""
+    load_dotenv()
+    try:
+        api = SunoApi(build_session())
+        projects = api.list_projects()
+    except (AuthError, SunoApiError) as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"{'CLIPS':>7}  WORKSPACE")
+    click.echo(f"{'-' * 7}  {'-' * 40}")
+    for p in sorted(projects, key=lambda p: -(p.get("clip_count") or 0)):
+        count = p.get("clip_count")
+        click.echo(f"{count if count is not None else '?':>7}  {p['name']}")
+    click.echo("\nArchive one with: suno-archiver --workspace \"NAME\"")
+    click.echo("Clips filed nowhere land in the archive's _unassigned/ folder.")
 
 
 @main.command()

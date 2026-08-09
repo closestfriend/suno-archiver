@@ -87,8 +87,31 @@ suno-archiver --no-art             # skip cover art (audio + metadata only)
 suno-archiver --last-run           # only what's new since the last run
 suno-archiver --since "2 weeks ago"
 suno-archiver --dir ~/Music/suno_archive
+suno-archiver workspaces           # list your workspaces and clip counts
+suno-archiver --workspace BEATS    # only that workspace (repeatable, -w)
 suno-archiver doctor               # diagnose auth/API issues
 ```
+
+### Working with one workspace
+
+`--workspace` is the practical way to use `--wav`: a whole-library WAV pull is one
+conversion request per song and enormous on disk, but a single workspace is very
+manageable.
+
+```bash
+suno-archiver workspaces                      # see what you have
+suno-archiver --workspace BEATS --wav         # lossless, just that workspace
+```
+
+Names are matched case-insensitively, against either the Suno name or the on-disk
+folder name (`HOUSE/SYNTHPOP/RETRO` or `HOUSE_SYNTHPOP_RETRO` both work). An
+unrecognized name is an error that lists the available workspaces — it will never
+quietly archive nothing. Use `_unassigned` for clips you never filed anywhere.
+
+A workspace-filtered run deliberately does **not** advance the `--last-run`
+watermark: that watermark is global, so moving it after archiving a subset would
+make your next incremental sync skip older clips in every workspace you didn't
+select.
 
 Re-runs are **idempotent** — existing files are skipped, so `--last-run` on a cron job keeps your archive current without re-downloading anything.
 
