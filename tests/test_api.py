@@ -84,6 +84,18 @@ class TestRequestCore(unittest.TestCase):
 
 
 class TestWav(unittest.TestCase):
+    def test_wav_request_accepts_no_content_response(self):
+        def handler(method, path, headers, body):
+            if path.endswith("/convert_wav/") and method == "POST":
+                return (204, {}, b"")
+            return json_response(404, {"detail": "nope"})
+        server = LocalServer(handler)
+        try:
+            api = SunoApi(FakeSession(), base_url=server.url)
+            self.assertIsNone(api.request_wav("clip123"))
+        finally:
+            server.close()
+
     def test_wav_poll_resolves_when_ready(self):
         polls = []
         def handler(method, path, headers, body):
