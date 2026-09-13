@@ -165,9 +165,11 @@ class SunoArchiver:
         partway through keeps everything already retrieved.
         """
         kept, page, past_since = 0, 0, False
+        print(f"workspace: {label}")
         while True:
             kwargs = {} if project_id is None else {"project": project_id}
             clips = self.api.list_library(page, **kwargs)
+            #print(f"clips: {clips}")
             if not clips:
                 break
             for c in clips:
