@@ -4,7 +4,7 @@ import time
 
 import requests
 
-STUDIO_BASE = "https://studio-api.prod.suno.com"
+STUDIO_BASE = "https://studio-api-prod.suno.com"
 
 # Suno files every clip into exactly one workspace ("project"). The `default`
 # project is only the *unassigned* bucket -- Suno labels it "Workspace for
