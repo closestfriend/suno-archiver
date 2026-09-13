@@ -356,7 +356,7 @@ class SunoArchiver:
 
             if self._has_file(month, base, AUDIO_EXTS):
                 skipped += 1
-            elif c.get("audio_url"):
+            elif c.get("audio_url") and "forbidden" not in c["audio_url"].lower():
                 jobs.append((c["audio_url"], month, base))
 
             if self.want_art:
