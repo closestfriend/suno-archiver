@@ -33,13 +33,14 @@ IMAGE_EXTS = ("jpg", "jpeg", "png", "webp", "gif")
 
 class SunoArchiver:
     def __init__(self, api, archive_dir="suno_archive", since=None, until=None,
-                 last_run=False, want_wav=False, want_art=True, only_workspaces=None):
+                 last_run=False, want_wav=False, want_m4a=False, want_art=True, only_workspaces=None):
         self.api = api
         self.archive_dir = Path(archive_dir)
         self.since = self.parse_date(since) if since else None
         self.until = self.parse_date(until) if until else None
         self.last_run = last_run
         self.want_wav = want_wav
+        self.want_m4a = want_m4a
         self.want_art = want_art
         self.only_workspaces = list(only_workspaces or [])
         self.clips = []
@@ -333,6 +334,17 @@ class SunoArchiver:
                 return c[key]
         return None
 
+    def _m4a_url_in_clip(self, c):
+        media_urls = c.get("media_urls")
+        if isinstance(media_urls, list):
+            for entry in media_urls:
+                if isinstance(entry, dict) and entry.get("url"):
+                    u = entry["url"]
+                    ct = entry.get("content_type", "").lower()
+                    if u.lower().endswith(".m4a") or "m4a-opus" in ct:
+                        return u
+        return None
+
     def _build_jobs(self):
         """Returns (jobs, skipped). One job per file to fetch; writes per-clip JSON."""
         jobs, skipped = [], 0
@@ -364,6 +376,17 @@ class SunoArchiver:
                         jobs.append(("__convert__:" + c["id"], month, base))
                     else:
                         print("  WARNING: clip without id, skipping WAV conversion")
+            if self.want_m4a:
+                if list(month.glob(f"{base}.m4a")):
+                    skipped += 1
+                else:
+                    m4a = self._m4a_url_in_clip(c)
+                    if m4a:
+                        jobs.append((m4a, month, base))
+                    elif c.get("id"):
+                        print("  WARNING: no m4a URL found for clip, skipping conversion")
+                    else:
+                        print("  WARNING: clip without id, skipping m4a download")
         return jobs, skipped
 
     def _run_job(self, job):

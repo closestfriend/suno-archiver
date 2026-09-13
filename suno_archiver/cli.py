@@ -22,13 +22,14 @@ def _build_archiver(**kwargs):
 @click.option("-u", "--until", help="Archive clips created until this date")
 @click.option("-l", "--last-run", is_flag=True, help="Incremental: only clips since the last successful run")
 @click.option("--wav", is_flag=True, help="Also fetch WAVs (slow: requests conversion per song)")
+@click.option("--m4a", is_flag=True, help="Also fetch m4a files")
 @click.option("--no-art", is_flag=True, help="Skip cover art; archive audio + metadata only")
 @click.option("-w", "--workspace", "workspaces", multiple=True,
               help="Only this workspace (repeatable). See: suno-archiver workspaces")
 @click.option("--dir", "archive_dir", default="suno_archive", show_default=True,
               help="Archive root directory")
 @click.pass_context
-def main(ctx, since, until, last_run, wav, no_art, workspaces, archive_dir):
+def main(ctx, since, until, last_run, wav, m4a, no_art, workspaces, archive_dir):
     """Archive your Suno library: audio, cover art, and complete metadata."""
     load_dotenv()
     if ctx.invoked_subcommand is not None:
@@ -37,7 +38,7 @@ def main(ctx, since, until, last_run, wav, no_art, workspaces, archive_dir):
         raise click.UsageError("--last-run cannot be combined with --since/--until")
     try:
         archiver = _build_archiver(archive_dir=archive_dir, since=since, until=until,
-                                   last_run=last_run, want_wav=wav, want_art=not no_art,
+                                   last_run=last_run, want_wav=wav, want_m4a=m4a, want_art=not no_art,
                                    only_workspaces=list(workspaces))
         archiver.run()
         if not archiver.clips and not archiver.fetch_complete:
