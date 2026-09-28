@@ -60,6 +60,7 @@ def _browser_cookie_candidates():
                 value = cookie.get("value", "")
                 if value and value not in seen:
                     seen.add(value)
+                    print(f"Found Suno session cookie in {name}.")
                     yield value
 
 
@@ -93,6 +94,7 @@ def build_session(base_url: str = CLERK_BASE) -> "ClerkSession":
         session = ClerkSession(candidate, base_url=base_url)
         try:
             session.get_token()
+            print("Successfully minted Suno JWT from session cookie.")
             return session
         except AuthError:
             continue

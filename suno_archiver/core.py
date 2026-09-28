@@ -1,19 +1,29 @@
 """Orchestration: fetch -> filter -> download pool -> state."""
 
+import base64
+import hashlib
 import json
+import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+import time
 
 import requests
+from Crypto.Cipher import AES
+from Crypto.Util import Counter
 
 from .suno_api import SunoApiError
 
 STATE_FILENAME = ".suno-archiver-state.json"
-DOWNLOAD_CONCURRENCY = 4
+DOWNLOAD_CONCURRENCY = 8
+WAIT_BETWEEN_WORKSPACES = 1.0  # seconds to wait between workspaces to avoid Suno rate-limit errors
+
+M4A_API_BASE = "https://studio-api-prod.suno.com"
+MANGO_CHUNK_SIZE = 256 * 1024  # 256 KB Chunks für Mango DRM Decryption
 
 # Folder for Suno's default project (its unassigned-clips bucket). Leading
 # underscore sorts it apart from real workspace names.
@@ -203,7 +213,11 @@ class SunoArchiver:
         seen = set()
         workspaces = self._workspaces()
         try:
+            first = True
             for project_id, label in workspaces:
+                if not first:
+                    time.sleep(WAIT_BETWEEN_WORKSPACES)  # avoid Suno rate-limit errors
+                first = False
                 kept = self._fetch_workspace(project_id, label, since, seen)
                 if kept:
                     print(f"  {label}: {kept} clips")
@@ -308,7 +322,7 @@ class SunoArchiver:
         parsed = urlparse(str(url))
         if parsed.scheme != "https" and parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
             raise ValueError(f"refusing non-https URL: {url}")
-        resp = requests.get(url, stream=True, timeout=60)
+        resp = requests.get(url, stream=True, timeout=600)
         resp.raise_for_status()
         ext = self._extension_for(url, resp.headers.get("Content-Type"))
         directory.mkdir(parents=True, exist_ok=True)
@@ -318,13 +332,89 @@ class SunoArchiver:
         size = 0
         try:
             with open(filepath, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8192):
+                for chunk in resp.iter_content(chunk_size=10*1024*1024):
                     f.write(chunk)
                     size += len(chunk)
         except Exception:
             filepath.unlink(missing_ok=True)
             raise
         return filepath, size
+
+    # ---- Mango DRM Decryption Internals
+
+    def _fetch_mango_license(self, clip_id):
+        url = f"{M4A_API_BASE}/api/mango/rights"
+        headers = {
+            "Content-Type": "application/json",
+            "Origin": "https://suno.com",
+            "Referer": "https://suno.com",
+        }
+        payload = {
+            "content_params": {"content_id": clip_id, "content_type": "clip"}
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _aes_gcm_decrypt(self, key, nonce, ciphertext_with_tag, aad):
+        ciphertext = ciphertext_with_tag[:-16]
+        tag = ciphertext_with_tag[-16:]
+        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+        cipher.update(aad)
+        return cipher.decrypt_and_verify(ciphertext, tag)
+
+    def _unwrap_mango_keys(self, license_data, clip_id):
+        glt = license_data.get("glt")
+        if not glt:
+            raise ValueError("Lizenz-Response enthält kein 'glt'")
+
+        user_key = hashlib.sha256(glt.encode("utf-8")).digest()
+        wrapped_key = base64.b64decode(license_data["key"])
+        wrapped_iv = base64.b64decode(license_data["iv"])
+        aad = clip_id.encode("utf-8")
+
+        aes_key = self._aes_gcm_decrypt(user_key, wrapped_key[:12], wrapped_key[12:], aad)
+        aes_iv = self._aes_gcm_decrypt(user_key, wrapped_iv[:12], wrapped_iv[12:], aad)
+        return aes_key, aes_iv
+
+    def _get_mango_file_size(self, url):
+        headers = {"Range": "bytes=0-0"}
+        resp = requests.get(url, headers=headers, timeout=30)
+        if "Content-Range" in resp.headers:
+            return int(resp.headers["Content-Range"].split("/")[-1])
+        if "Content-Length" in resp.headers:
+            return int(resp.headers["Content-Length"])
+        raise ValueError("Dateigröße konnte nicht ermittelt werden.")
+
+    def _decrypt_and_save_mango_m4a(self, clip_id, media_url, directory, base_name):
+        license_data = self._fetch_mango_license(clip_id)
+        aes_key, aes_iv = self._unwrap_mango_keys(license_data, clip_id)
+        total_size = self._get_mango_file_size(media_url)
+
+        directory.mkdir(parents=True, exist_ok=True)
+        filepath = directory / f"{base_name}.m4a"
+
+        offset = 0
+        with open(filepath, "wb") as f_out:
+            while offset < total_size:
+                end = min(offset + MANGO_CHUNK_SIZE, total_size) - 1
+                headers = {"Range": f"bytes={offset}-{end}"}
+
+                resp = requests.get(media_url, headers=headers, timeout=30)
+                encrypted_chunk = resp.content
+
+                block_offset = offset // 16
+                iv_int = int.from_bytes(aes_iv, byteorder="big")
+                initial_value = iv_int + block_offset
+
+                ctr_object = Counter.new(128, initial_value=initial_value)
+                cipher = AES.new(aes_key, AES.MODE_CTR, counter=ctr_object)
+                decrypted_chunk = cipher.decrypt(encrypted_chunk)
+
+                f_out.write(decrypted_chunk)
+                offset += MANGO_CHUNK_SIZE
+
+        return filepath, filepath.stat().st_size
 
     # ---- orchestration
 
@@ -380,13 +470,13 @@ class SunoArchiver:
                 if list(month.glob(f"{base}.m4a")):
                     skipped += 1
                 else:
-                    m4a = self._m4a_url_in_clip(c)
-                    if m4a:
-                        jobs.append((m4a, month, base))
-                    elif c.get("id"):
-                        print("  WARNING: no m4a URL found for clip, skipping conversion")
+                    clip_id = c.get("id")
+                    m4a_url = self._m4a_url_in_clip(c)
+                    if clip_id and m4a_url:
+                        # Mango DRM Entschlüsselungsjob via custom internal Prefix einreihen
+                        jobs.append((f"__mango__:{clip_id}|{m4a_url}", month, base))
                     else:
-                        print("  WARNING: clip without id, skipping m4a download")
+                        print("  WARNING: clip missing id or m4a media URL, skipping m4a archive")
         return jobs, skipped
 
     def _run_job(self, job):
@@ -395,6 +485,14 @@ class SunoArchiver:
             clip_id = url.split(":", 1)[1]
             self.api.request_wav(clip_id)
             url = self.api.get_wav_url(clip_id)
+            return self.download_file(url, directory, base)
+
+        if url.startswith("__mango__"):
+            # Metadaten-Payload aus der Jobliste parsen
+            payload = url.split(":", 1)[1]
+            clip_id, media_url = payload.split("|", 1)
+            return self._decrypt_and_save_mango_m4a(clip_id, media_url, directory, base)
+
         return self.download_file(url, directory, base)
 
     def _index_path(self):
