@@ -18,7 +18,15 @@ Run it on a schedule with `--last-run` and the archive stays current automatical
 
 It archives **every workspace**, not just your unassigned clips — see the warning below if you used version 1.x.
 
-> **Verified working: 2026-08-08.** Re-confirmed end to end against Suno's current API on a Pro account — browser-session detection, Clerk token exchange, workspace enumeration, and a live archive run, plus idempotent re-runs and `--last-run` incremental sync.
+## Status: maintained, honestly labeled
+
+This tool rides Suno's **private studio API** (`studio-api.prod.suno.com`) and authenticates by reusing your browser's Clerk session cookie. Suno publishes no stable API: **any backend change on their side can break this tool without notice.** That is a property of the territory, not a bug to fix.
+
+- **Core flow (MP3 + cover art + metadata): verified end-to-end 2026-08-08** on a Pro account — browser-session detection, Clerk token exchange, workspace enumeration, a live archive run, idempotent re-runs, and `--last-run` incremental sync. User reports through late September 2026 confirm auth, workspace enumeration, and MP3 downloads still working.
+- **`--wav` is broken upstream** since ~August 2026 — Suno's convert endpoint now returns HTTP 204 ([#2](https://github.com/closestfriend/suno-archiver/issues/2)). MP3s are unaffected.
+- **Encrypted M4A downloads are out of scope.** Suno serves M4A encrypted; decrypting their delivery is circumvention, and this project won't ship it ([#4](https://github.com/closestfriend/suno-archiver/issues/4)).
+
+Maintenance mode: I keep the core MP3 archive path working as long as that stays cheap, and label breakage here when it isn't. Archive your library while the ground is firm.
 
 > ⚠️ **If you used version 1.x, your archive is incomplete.** Every release through 1.0.1 fetched only Suno's `default` project — which is just the *unassigned clips* bucket — so anything you filed into a named workspace was silently skipped, with the run still reporting `0 errors`. On the 4,257-clip library this was measured against, 1.0.1 retrieved 1,768 and missed **2,489 tracks (58%)**. Upgrade with `pip install -U suno-archiver` and re-run. Fixed in 2.0.0, which also changes the archive layout — see [CHANGELOG](CHANGELOG.md).
 
