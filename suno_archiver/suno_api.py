@@ -27,7 +27,7 @@ class SunoApi:
         self.session = session  # ClerkSession-compatible: get_token() / invalidate()
         self.base_url = base_url
 
-    def _request(self, method: str, path: str, _retried: bool = False):
+    def _request(self, method: str, path: str, _retried: bool = False, allow_empty: bool = False):
         resp = requests.request(
             method,
             f"{self.base_url}{path}",
@@ -36,13 +36,15 @@ class SunoApi:
         )
         if resp.status_code == 401 and not _retried:
             self.session.invalidate()
-            return self._request(method, path, _retried=True)
+            return self._request(method, path, _retried=True, allow_empty=allow_empty)
         if not resp.ok:
             try:
                 detail = resp.json().get("detail", resp.text)
             except ValueError:
                 detail = resp.text
             raise SunoApiError(resp.status_code, detail)
+        if allow_empty and not resp.content:
+            return None
         try:
             return resp.json()
         except ValueError:
@@ -103,7 +105,8 @@ class SunoApi:
         )
 
     def request_wav(self, clip_id: str) -> None:
-        self._request("POST", f"/api/gen/{clip_id}/convert_wav/")
+        # Suno acknowledges conversion requests with either JSON or 204 No Content.
+        self._request("POST", f"/api/gen/{clip_id}/convert_wav/", allow_empty=True)
 
     def get_wav_url(self, clip_id: str, interval: float = 2.0, timeout: float = 120.0) -> str:
         deadline = time.time() + timeout
